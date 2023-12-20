@@ -1,0 +1,80 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-07-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+```
+
+```{r}
+main_snp = "rs58821592"
+lead = "rs6596100"
+assoc_snps <- dplyr::filter(res_merge, grepl(lead, lead_snp))
+start = 132211071
+# AFF4 start - 132211071
+# aff4 end - hspa4 end chr5:132211071-132442141
+end = max(assoc_snps$Start_37) + 1000
+start = 132270000
+end = 132445000
+# chr5:132200000-132450000
+assoc_snps <- assoc_snps %>%
+  mutate(sig = ifelse(hmec_fdr < 0.05, T, F))
+
+p <- ggplot(assoc_snps, aes(x = Start_37, y = -log10(hmec_fdr),
+            col = sig)) +
+  geom_point(size = 0.5) +
+  scale_color_manual(values = c("black", "firebrick1")) +
+  theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        line=element_line(linewidth=0.2),
+        legend.key.size = unit(0.2, 'cm')) +
+  xlim(start, end)+
+    labs(x = "Position", y = "-log10(FDR)")
+ggsave(here("images/figure_panels/rs58821592_locus_hmec_mpra_results.pdf"),
+         p,
+         width = 80, height = 20, units = "mm")
+p
+
+```
+
+
+```{r}
+main_snp = "rs10411210"
+lead = "rs10411210"
+assoc_snps <- dplyr::filter(res_merge, grepl(lead, lead_snp))
+start = min(assoc_snps$Start_37)
+end = max(assoc_snps$Start_37) + 1000
+start = 33470000
+end = 33570000
+
+# initial rs1 coords - 33300000-33670000
+
+
+assoc_snps <- assoc_snps %>%
+  mutate(sig = ifelse(colon_fdr < 0.05, T, F))
+
+rs1_p <- ggplot(assoc_snps, aes(x = Start_37, y = -log10(colon_fdr),
+            col = sig)) +
+  geom_point(size = 0.5) +
+  scale_color_manual(values = c("black", "firebrick1")) +
+  theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        line=element_line(linewidth=0.2),
+        legend.key.size = unit(0.2, 'cm')) +
+  xlim(start, end)+
+    labs(x = "Position", y = "-log10(FDR)")
+rs1_p
+ggsave(here("images/figure_panels/rs10411210_locus_colon_mpra_results_zoom.pdf"),
+         rs1_p,
+         width = 80, height = 19, units = "mm")
+
+
+
+```
+

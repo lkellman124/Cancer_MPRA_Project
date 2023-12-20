@@ -1,0 +1,62 @@
+---
+title: "PipelineCommands_NextSeqPool1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+files = list.files('~/Documents/MPRA/Cancer_MPRA_Scaleup/Sequencingv3/NextSeq_Pool1/201015_NS500615_0968_AHTNF3BGXC-SFGF-Khavari-LK-15577/fastqs')
+cells_samples = unique(str_remove(str_remove(files, "_R.*$"), "-[A-Z]+-[A-Z]+"))
+cells_samples <- cells_samples[-grep("Undetermined", cells_samples)]
+```
+
+```{r}
+cells = unlist(str_split(c('ast,colon,endo,eso,hmec,hmec,hmec,lx,mc,ov,panc,panc,panc,pros,pros,thy'), ","))
+reps = unlist(str_split(c('2,1,3,1,1,2,3,2,3,3,1,2,3,2,3,3'), ","))
+sample_nums = unlist(str_split(c("S14,S3,S8,S4,S11,S12,S13,S2,S5,S7,S9,S10,S1,S15,S16,S6"), ","))
+samples = paste(cells, reps, sep = "_")
+```
+
+
+Sample names, numbers
+
+```{r}
+# Trim off the indices - sample 1
+samples =  unlist(lapply(str_split(cells_samples, "_"), function(x) x[1]))
+sample_nums = unlist(lapply(str_split(cells_samples,"_"), function(x) x[2]))
+sample_repnums = c(2, 1, )
+date = "102520"
+exp_name = "cmpra_v3"
+
+for (i in 1:length(samples)){
+  sample = samples[i]
+  sample_num = sample_nums[i]
+  file_names = files[grep(paste0(sample_num, "_"), files)]
+  R1 = file_names[grep("R1", file_names)]
+  R2 = file_names[grep("R2", file_names)]
+ 
+  cat(paste("gunzip -c fastqs/", R1, " | fastx_trimmer -f 1 -l 20 -Q33 -o ", sample, "-trimmed.fastq -v", "\n",
+            "fastx_reverse_complement -Q33 -i  ", sample, "-trimmed.fastq -o ", sample, "-trimmed_rc.fastq -v", "\n",
+            "umi_tools extract --bc-pattern=NNNNNNNNNNNN --stdin=fastqs/", R2, " --read2-in=", sample, 
+            "-trimmed_rc.fastq --stdout=", sample, "_umi_extracted.fastq --read2-stdout", "\n",
+            "bowtie2 -p 8 -k 1 --norc -x /Users/laurakellman/Documents/MPRA/Cancer_MPRA/Sequencing/Indexes/cmpra_renamed_index ",
+            sample, "_umi_extracted.fastq -S ", sample, "-aligned.sam --no-unal", "\n", 
+            "samtools view -S -b ", sample, "-aligned.sam > ", sample, "-aligned.bam", "\n",
+            "samtools sort ", sample, "-aligned.bam -o ", sample, "-aligned-sorted.bam", "\n",
+            "samtools index ", sample, "-aligned-sorted.bam", "\n", 
+            "umi_tools dedup -I ", sample, "-aligned-sorted.bam -L logfile_", sample, ".txt --out-sam --no-sort-output -S ", sample,
+            "_dedup.sam", "\n",
+            "awk \'$1 !~ /^@/ {print $1\"\\t\"$3}\' ", sample, "_dedup.sam > ", sample, "_dedup_reformat.tsv", "\n",
+            "umi_tools count_tab -I ", sample, "_dedup_reformat.tsv -S ", sample, "_counts.tsv -L ", sample, "_count.log", "\n",
+            "\n", "\n",
+            sep=""))
+}
+
+  
+```
+
+

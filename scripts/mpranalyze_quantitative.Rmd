@@ -1,0 +1,144 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(here)
+library(tidyverse)
+library(MPRAnalyze)
+library(BiocParallel)
+```
+
+
+MPRAnalyze results were analyzed using MPRAnalyze 1.8.0. It's inelegant, but to run this I use rswitch to go back to R version 4.0.2, where I have BiocManager 1.30.20, BiocVersion 3.12.0 and MPRAnalyze 1.8.0 installed. 
+
+Analyze the MPRA counts files using MPRAnalyze quantitative mode
+Gives an estimate of transcription rate for each oligo
+
+Read in counts file
+```{r}
+lib <- read_tsv(here("data/nextseq_counts_111920.tsv")) %>%
+  dplyr::select(-gm_1, -gm_2, -gm_3, -h9_1, -h9_2, -h9_3)
+
+```
+
+Separate oligo name into locus, allele, barcode
+```{r}
+lib <- lib %>% separate(oligo, into=c("oligo_type", "locus", "allele", "barcode"), 
+                        sep="_", remove=F) %>%
+  mutate(locus = paste(oligo_type, locus, sep="_")) %>%
+  dplyr::select(-oligo, -oligo_type)
+```
+
+For quantitative analysis, keep scrambles and motifs
+Don't split on alleles
+
+Make DNA matrix for MPRAnalyze
+```{r}
+lib <- lib %>% unite(locus, locus, allele)
+
+dna <- lib %>% dplyr::select(locus, barcode, plasmid_2, plasmid_3)%>%
+  pivot_longer(cols=c(plasmid_2, plasmid_3), names_to = "dna_batch", 
+               values_to = "count") %>%
+  mutate(dna_batch = ifelse(dna_batch == "plasmid_2", "rep1", "rep2")) %>% 
+  rowwise() %>%
+  mutate(batch.bc = paste(dna_batch, barcode, sep="-")) %>%
+  dplyr::select(-barcode, -dna_batch) %>%
+  spread(key= batch.bc, value = count)
+future_rownames <- dna$locus
+dna <- dna %>% ungroup() %>% dplyr::select(-locus)
+dna[is.na(dna)] <- 0
+dna <- as.matrix(dna)
+rownames(dna) <- future_rownames
+
+```
+
+Make RNA matrix with all celltypes
+```{r}
+rna <- lib %>% dplyr::select(-plasmid_2, -plasmid_3) %>%
+  pivot_longer(c(-locus, -barcode), names_to = "cell_type",
+               values_to="count")
+rna <- rna %>% unite("cell_type", cell_type, barcode, sep="-")
+rna <- rna %>% pivot_wider(names_from=cell_type, values_from = count)
+
+future_rownames <- rna$locus
+rna <- rna %>% ungroup() %>% dplyr::select(-locus)
+rna[is.na(rna)] <- 0
+rna <- as.matrix(rna)
+rownames(rna) <- future_rownames
+rna <- rna[order(as.character(rownames(rna))),]
+
+```
+
+Make DNA column annotations
+```{r}
+col_dna = data.frame(dna_batch = str_remove(colnames(dna), "-.*$"),
+                      barcode = str_remove(colnames(dna), "^.*-"))
+rownames(col_dna) <- colnames(dna)
+```
+
+```{r}
+cells = unique(str_remove(colnames(rna), "_.*"))
+res = data.frame()
+loci = distinct(dplyr::select(lib, locus))
+
+# dna and col_dna can stay the same
+# rna needs to be filtered for only the cell related columns
+# rna col annot needs to be made
+rna_cell <- rna
+
+control_snps <- grep("scr", rownames(rna_cell))
+col_rna = data.frame(condition = str_remove(colnames(rna_cell), "_.*"),
+                     batch = str_remove(str_remove(colnames(rna_cell), "^.*_"),
+                                        "-.*$"),
+                     barcode = str_remove(str_remove(colnames(rna_cell), "-ref$|-alt$"), ".*-"))
+rownames(col_rna) <- colnames(rna_cell)
+obj <- MpraObject(dnaCounts =dna, rnaCounts =rna_cell, dnaAnnot = col_dna, 
+                  rnaAnnot = col_rna, controls = control_snps)
+obj <- estimateDepthFactors(obj, lib.factor = "dna_batch", which.lib = "dna", 
+                            depth.estimator = "uq")
+obj <- estimateDepthFactors(obj,which.lib = "rna", lib.factor= c("batch","condition"),
+                            depth.estimator = "uq")
+obj <- analyzeQuantification(obj = obj, 
+                             dnaDesign = ~ barcode, 
+                             rnaDesign = ~ condition)
+  
+alpha <- getAlpha(obj, by.factor = "all")
+
+colnames(alpha)[1] <- "conditionairway"
+mpraq_full = data.frame()
+for (conditioncell in colnames(alpha)){
+  cell <- str_remove(conditioncell, "^condition")
+  res_df <- testEmpirical(obj = obj, statistic = alpha[[conditioncell]])
+  res_df$locus <- rownames(alpha)
+  res_df$celltype <- cell
+  write_tsv(res_df, paste0(here("output/MPRAnalyze_quantitative_intermediates/"),
+                        cell, "_mpranalyze_quantitative.tsv"))
+  mpraq_full = bind_rows(mpraq_full, res_df)
+}
+
+```
+
+```{r}
+mpraq_full <- mpraq_full %>% mutate(oligo_type = str_remove(locus, "^.*_"),
+                                    oligo_id = locus,
+                                    locus = str_remove(oligo_id, "_ref|_alt"))
+
+lib_bg <- read_tsv(here("output/cancer_lib_haploreg_diseasereannotated.tsv"))
+res_cut <- dplyr::select(lib_bg, locus, Causal_SNP, Ref, Alt, snp_sequence) %>% distinct()
+
+mpraq_ext <- left_join(mpraq_full, res_cut)
+colnames(mpraq_ext)
+mpraq_ext <- dplyr::select(mpraq_ext, celltype, locus, oligo_id, oligo_type, Causal_SNP,  statistic, control, zscore, mad.score, pval.mad,
+                            pval.zscore, pval.empirical, Ref, Alt, snp_sequence)
+
+mpraq_ext <- mpraq_ext %>% 
+  mutate(fdr = p.adjust(pval.mad, method = "fdr"))
+write_tsv(mpraq_ext, here("output/mpranalyze_quantitative_results.tsv"))
+
+```
+
+

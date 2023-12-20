@@ -1,0 +1,456 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-11-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(ReactomePA)
+library(clusterProfiler)
+library(foreach)
+library(doParallel)
+library(UpSetR)
+library(org.Hs.eg.db)
+```
+Investigating reactome enrichments in ptgenes
+Want to:
+1. compare enrichments in each cancer type, with expressed genes in that cell type as background
+2. look at enrichment in the set of all genes, and pick a few for cancer-types-converging-on-a-pathway examples
+3. look at enrichment in the set of all genes, comparing eQTLs to HiChIP
+4. look enrichment compared to randomly drawn snps
+
+Read in the results
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+rnaseq <- read_tsv(here("output/merged_rnaseq_LD_gene_tpms.tsv"))
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+```
+
+Format ptgene data frames
+```{r}
+ptgene_df <- res_merge %>% dplyr::select(locus, gtex_spec_lead_shared,
+                                         eqtlgen_egene_lead_shared, hichip_egene,
+                                         genes_within_5kb = genes_within_10kb, 
+                                         hit_spec) %>%
+  pivot_longer(cols = c(-locus, -hit_spec), names_to = "source",
+               values_to = "ptgene") %>%
+  mutate(ptgene = str_split(ptgene, ",|;")) %>%
+  unnest(ptgene) %>% 
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec) %>%
+  distinct()
+  
+ptgene_cells <- ptgene_df %>%
+  dplyr::select(hit_spec, ptgene) %>%
+  dplyr::filter(!is.na(hit_spec) &
+                  !is.na(ptgene)) %>%
+  mutate(ptgene = str_split(ptgene, ",")) %>%
+  unnest(ptgene) %>%
+  distinct() %>%
+  dplyr::filter(!is.na(ptgene))
+```
+
+Convert gene names - reactomePA needs ENTREZ IDs
+```{r}
+# annotationDBI is matching a tiny bit more than bitr for me, so switched
+rnaseq_id_mapping <- AnnotationDbi::select(org.Hs.eg.db, keys = rnaseq$gene_id,
+                                         keytype = "ENSEMBL", 
+                                         columns = c("SYMBOL", "ENTREZID"))
+rnaseq_id_mapping <- rnaseq_id_mapping %>%
+  dplyr::filter(!is.na(ENTREZID))
+rnaseq <- left_join(rnaseq, rnaseq_id_mapping,
+                    by = c("gene_id" = "ENSEMBL"))
+
+ptgene_id_mapping <- AnnotationDbi::select(org.Hs.eg.db, keys = unique(ptgene_df$ptgene),
+                                         keytype = "SYMBOL", 
+                                         columns = "ENTREZID")
+ptgene_id_mapping <- ptgene_id_mapping %>%
+  dplyr::filter(!is.na(ENTREZID))
+ptgene_df <- left_join(ptgene_df, ptgene_id_mapping,
+                    by = c("ptgene" = "SYMBOL"))
+ptgene_cells <- left_join(ptgene_cells, ptgene_id_mapping,
+                          by = c("ptgene" = "SYMBOL"))
+```
+1. compare enrichments in each cancer type, filtered for expressed genes in that cell type
+```{r}
+# pick a cutoff for expression in the rnaseq
+rnaseq$row_sum <- rowSums(rnaseq[2:27])
+quantile(rnaseq$row_sum, seq(0, 1, 0.1))
+# up through 40% have all 0s - just filter out all the 0s
+expr_cutoff = 0
+
+celltypes = unique(ptgene_df$hit_spec)
+celltypes <- celltypes[!is.na(celltypes)]
+rnaseq_cellconvert <- rnaseq %>%
+  mutate(airway = `Airway-B1_TPM` + `Airway-B2_TPM`,
+         ast = `Astrocytes-B1_TPM` + `Astrocytes-B2_TPM`,
+         colon = `Colon-B1_TPM` + `Colon-B2_TPM`,
+         eso = `Esophageal-B1_TPM` + `Esophageal-B2_TPM`,
+         kc = `GDSD0-B1_TPM` + `GDSD0-B2_TPM`,
+         hmec = `HMEC-B1_TPM` + `HMEC-B2_TPM`,
+         mc = `Melanocytes-B1_TPM` + `Melanocytes-B2_TPM`,
+         ov = `Ovarian-B1_TPM` + `Ovarian-B2_TPM`,
+         panc = `Pancreas-B1_TPM` + `Pancreas-B2_TPM`,
+         pros = `Prostate-B1_TPM` + `Prostate-B2_TPM`,
+         renal = `Renal-B1_TPM` + `Renal-B2_TPM`,
+         thy = `Thyroid-B1_TPM` + `Thyroid-B2_TPM`,
+         endo = `Uterine-B1_TPM` + `Uterine-B2_TPM`) %>%
+  dplyr::select(gene_id, SYMBOL, ENTREZID, airway, ast, colon, eso, kc, hmec,
+                mc, ov, panc, pros, renal, thy, endo)
+         
+cell_enrich_res <- data.frame()
+for (cell in celltypes){
+  print(cell)
+  bg = rnaseq_cellconvert$ENTREZID[rnaseq_cellconvert[,cell] > 0]
+  genes <- ptgene_cells$ENTREZID[ptgene_cells$hit_spec == cell]
+  print(length(bg))
+  print(length(genes))
+  enrich_res <- enrichPathway(gene = genes, pvalueCutoff = 0.1, 
+                             readable = T, universe = bg)
+  enrich_res_df <- enrich_res@result
+  enrich_res_df$celltype <- cell
+  cell_enrich_res <- rbind(cell_enrich_res, enrich_res_df)
+}
+
+sig_pathways_cell <- dplyr::filter(cell_enrich_res, p.adjust < 0.1)
+sig_pathways_cell <- sig_pathways_cell %>% rowwise() %>%
+  mutate(CancerType = name_key$cancer[name_key$celltype == celltype])
+sig_pathways_cell_filt <- dplyr::filter(sig_pathways_cell, Count > 1)
+
+sig_pathways_cell_filt$CancerType <- factor(sig_pathways_cell_filt$CancerType,
+                                                    ordered = T, 
+                                                    levels = c("PRAD", "KC",
+                                                               "PAAD", "BRCA",
+                                                               "LUAD", "KIRC",
+                                                               "THCA"))
+                                                    
+sig_pathways_cell_filt <- sig_pathways_cell_filt[order(sig_pathways_cell_filt$CancerType,
+                                             sig_pathways_cell_filt$p.adjust,
+                                             decreasing = F),]
+sig_pathways_cell_filt$Description <- factor(sig_pathways_cell_filt$Description,
+                                        ordered = T,
+                                        levels = unique(sig_pathways_cell_filt$Description))
+
+cell_comparison <- ggplot(sig_pathways_cell_filt,
+       aes(y = CancerType, x = Description, col = -log10(p.adjust))) +
+  geom_point(shape = "square") +
+#  geom_point(shape = "I", size = 4.5) +
+  theme_minimal() +
+  theme(text = element_text(size=5),
+        axis.text.x = element_text(angle = 90, vjust = 1, hjust=1, size = 5),
+        axis.text.y = element_text(size = 5),
+        panel.grid.major = element_line(size = 0.2, linetype = 'solid'))
+
+cell_comparison
+
+ggsave(here("images/possible_supplementary_panels/reactome_cancer_type_comparison_expr_bg.pdf"),
+       cell_comparison, width = 90, height = 85, units = 'mm')
+# I want to format the combined table in excel, but can't get excel to stop making
+# the gene ratios into dates. Tried adding things to make excel interpret it right
+# like ' or 0, didn't work. So when opening these, go File>Import, and change
+# the column data format on the last screen.
+sig_pathways_cell <- sig_pathways_cell %>%
+  mutate(GeneRatio = paste0("\'", GeneRatio),
+         BgRatio = paste0("\'", BgRatio))
+write_tsv(dplyr::select(sig_pathways_cell, -celltype),
+          here("output/SupplementaryTables/reactome_enrichments_celltype_comparison_expressedbg.tsv"))
+
+```
+2. look at enrichment in the set of all genes, and pick a few for cancer-types-converging-on-a-pathway examples
+```{r}
+ptgene_df_all <- ptgene_df %>%
+  dplyr::filter(!is.na(hit_spec)) %>%
+  dplyr::select(-source) %>%
+  distinct()
+  
+enrich_all_res <- enrichPathway(gene = unique(ptgene_df_all$ENTREZID),
+                                              pvalueCutoff = 0.1,
+                                              readable = T)
+enrich_all_df <- enrich_all_res@result
+enrich_all_df <- enrich_all_df %>%
+  dplyr::filter(p.adjust < 0.1)
+write_tsv(enrich_all_df,
+          here("output/SupplementaryTables/reactome_enrichments_set_of_all_ptgenes.tsv"))
+
+# write out dfs to make converging pathways figures
+pathways_of_interest <- c("RHO GTPase Effectors", "DNA Repair",
+                          "Cellular Senescence", "Cell Cycle Checkpoints",
+                          "Interferon Signaling",
+                          "Anchoring of the basal body to the plasma membrane")
+pathway_examples <- dplyr::filter(enrich_all_df, Description %in%
+                                    pathways_of_interest) %>%
+  mutate(ptgene = str_split(geneID, "/")) %>%
+  unnest(ptgene)
+cancer_gene_collapse <- dplyr::select(ptgene_df, ptgene, hit_spec) %>%
+  dplyr::filter(!is.na(hit_spec) & !is.na(ptgene)) %>%
+  distinct()
+pathway_examples <- left_join(pathway_examples, cancer_gene_collapse)
+pathway_examples <- pathway_examples %>%
+  group_by(Description, ptgene) %>%
+  summarise(cancer_type = paste(sort(unique(hit_spec)), collapse = ","))
+pathway_examples <- pathway_examples[order(pathway_examples$Description,
+                                           pathway_examples$cancer_type),]
+write_tsv(pathway_examples,
+          "~/Documents/CancerMPRA/NewReactomeEnrichments/converging_pathway_examples_20231204.tsv")
+```
+
+3. look at enrichment in the set of all genes, comparing eQTLs to HiChIP
+```{r}
+enrichment_by_gene_source <- data.frame()
+for (source_type in unique(ptgene_df$source)) {
+  genes = dplyr::filter(ptgene_df, !is.na(hit_spec) & source == source_type)
+  enrichment = enrichPathway(gene = genes$ENTREZID, pvalueCutoff = 0.1,
+                             readable = T)
+  enrichment_df = enrichment@result
+  enrichment_df$gene_source <- source_type
+  enrichment_by_gene_source <- rbind(enrichment_by_gene_source, enrichment_df)
+}
+
+# some manual annotations of the pathways (by me) from when I was using
+# p < 0.05, Reading in and adding to the data frame, then I'll do the rest of them
+# in excel. Related to claims I'm making in the results on % of obviously 
+# irrelevant cell type related pathways and what types of pathways show up in 
+# each cell type.
+annot <- read_tsv(here("output/reactome_enrichment_by_gene_source_sig_new_annot.txt"))
+
+enrichment_by_gene_source_format <- dplyr::filter(enrichment_by_gene_source,
+                                           p.adjust < 0.1)
+# there are no Count == 1s here, because the pvalues aren't low enough
+enrichment_by_gene_source_format <- enrichment_by_gene_source_format %>%
+  mutate(gene_source = case_when(
+    gene_source == "eqtlgen_egene_lead_shared" ~ "eQTLgen",
+    gene_source == "gtex_spec_lead_shared" ~ "GTEx",
+    gene_source == "hichip_egene" ~ "H3K27ac HiChIP",
+    gene_source == "genes_within_5kb" ~ "Proximity"))
+# there's a problem in the join - there's some extra white space on one of the Description 
+# entries that seems gone in annot. Strip final spaces from all of them
+enrichment_by_gene_source_format <- enrichment_by_gene_source_format %>%
+  mutate(Description = str_remove(Description, " $"))
+enrichment_by_gene_source_format <- left_join(enrichment_by_gene_source_format,
+                                              distinct(dplyr::select(annot, annotation,
+                                                            Description)))
+write_tsv(enrichment_by_gene_source_format, here("output/SupplementaryTables/reactome_enrichment_by_gene_source_sig0.1.tsv"))
+
+annot_summary <- data.frame(table(annot[c(10, 11)])) %>%
+  pivot_wider(names_from = gene_source,
+              values_from = Freq)
+
+enrichment_by_gene_source_sig <- dplyr::filter(enrichment_by_gene_source_format,
+                                           p.adjust < 0.05 & Count > 1)
+
+enrichment_by_gene_source_sig$gene_source <- factor(enrichment_by_gene_source_sig$gene_source,
+                                                    ordered = T, 
+                                                    levels = c("eQTLgen",
+                                                               "GTEx",
+                                                               "H3K27ac HiChIP",
+                                                               "Proximity"))
+                                                      
+enrichment_by_gene_source_sig <- enrichment_by_gene_source_sig[order(enrichment_by_gene_source_sig$gene_source,
+                                                                     enrichment_by_gene_source_sig$p.adjust,
+              decreasing = F),]
+enrichment_by_gene_source_sig$Description <- factor(enrichment_by_gene_source_sig$Description,
+                                                    ordered = T,
+                                                    levels = unique(enrichment_by_gene_source_sig$Description))
+check <- dplyr::filter(enrichment_by_gene_source_sig,
+                                          !annotation %in% c("Irrelevant", "Immune/irrelevant"))
+
+source_comparison <- ggplot(dplyr::filter(enrichment_by_gene_source_sig,
+                                          !annotation %in% c("Irrelevant", "Immune/irrelevant")),
+       aes(y = gene_source, x = Description, col = -log10(p.adjust))) +
+  geom_point(shape = "I", size = 4.5) +
+  theme_minimal() +
+  theme(text = element_text(size=5),
+        axis.text.x = element_text(angle = 90, vjust = 1, hjust=1, size = 5),
+        axis.text.y = element_text(size = 5),
+        panel.grid.major = element_line(size = 0.2, linetype = 'solid'))
+    
+source_comparison
+ggsave(here("images/possible_supplementary_panels/reactome_enrichment_across_gene_sources_sig0.5_noirrelevant.pdf"),
+       source_comparison, width = 140, height = 110, units = 'mm')
+
+
+gene_source_table <- ptgene_df %>%
+  dplyr::filter(!is.na(hit_spec) & !is.na(ptgene)) %>%
+  dplyr::select(source, ptgene) %>%
+  distinct()
+gene_list = list(`GTEx (tissue-specific)` = gene_source_table$ptgene[gene_source_table$source == "gtex_spec_lead_shared"],
+                 eQTLgen = gene_source_table$ptgene[gene_source_table$source == "eqtlgen_egene_lead_shared"],
+                 Proximity = gene_source_table$ptgene[gene_source_table$source == "genes_within_5kb"],
+                 `H3K27ac HiChIP` = gene_source_table$ptgene[gene_source_table$source == "hichip_egene"])
+
+table(gene_source_table$source)
+pdf(file=here("images/possible_supplementary_panels/ptgene_source_upset_plot.pdf"),
+    width = 2.4, height = 2.5)
+upset(fromList(gene_list), text.scale = 0.5, line.size = 0.5, point.size = 0.5)
+dev.off()
+
+```
+
+4. look at enrichment compared to gene sets derived from randomly drawn snps
+
+
+```{r}
+unnest_ptgenes <- function(df){
+  # take the hits from a df with hit_spec (T/F) and ptGenes
+  # unnest the ptGenes
+  # return a gene set
+  hit_df <- dplyr::filter(df, hit_spec)
+  ptgenes = data.frame(ptgene = unique(unlist(str_split(hit_df$ptGenes, ",|;"))))
+  return(ptgenes$ptgene[!is.na(ptgenes$ptgene) & !ptgenes$ptgene == ""])
+}
+
+get_enrichments <- function(gene_set, trial_num){ 
+  # changed from 0.1
+  res <- enrichPathway(gene = gene_set, pvalueCutoff = 1, readable = T)
+  res <- dplyr::select(res@result, ID, Description, GeneRatio, BgRatio,
+                           pvalue, p.adjust)
+  colnames(res) <- c("ID", "Description", paste(colnames(res)[3:6], trial_num, sep = "_"))
+  return(res)
+}
+
+get_enrichments_ponly <- function(gene_set, trial_num){ 
+  res <- enrichPathway(gene = gene_set, pvalueCutoff = 1, readable = T)
+  res <- dplyr::select(res@result, ID, Description, pvalue)
+  colnames(res) <- c("ID", "Description", paste(colnames(res)[3], trial_num, sep = "_"))
+  return(res)
+}
+
+get_go_enrichments <- function(gene_set, trial_num){ 
+  # changed from 0.1
+  res <- enrichGO(gene = gene_set, ont = "MF", OrgDb = org.Hs.eg.db, 
+                  pvalueCutoff = 1, readable = T,
+                  minGSSize = 20)
+  res <- dplyr::select(res@result, ID, Description, GeneRatio, BgRatio,
+                           pvalue, p.adjust)
+  colnames(res) <- c("ID", "Description", paste(colnames(res)[3:6], trial_num, sep = "_"))
+  return(res)
+}
+
+get_go_enrichments_ponly <- function(gene_set, trial_num){ 
+  res <- enrichGO(gene = gene_set, ont = "MF", OrgDb = org.Hs.eg.db, 
+                  pvalueCutoff = 1, readable = T, ,
+                  minGSSize = 20)
+  res <- dplyr::select(res@result, ID, Description, pvalue)
+  colnames(res) <- c("ID", "Description", paste(colnames(res)[3], trial_num, sep = "_"))
+  return(res)
+}
+
+
+```
+
+```{r}
+all_genes <- unique(ptgene_df$ENTREZID)
+ptgenes <- unique(ptgene_df$ENTREZID[!is.na(ptgene_df$hit_spec)])
+gwas_enrichment <- get_enrichments(all_genes, "gwas")
+ptgene_enrichment <- get_enrichments(ptgenes, "ptgene")
+gwas_ptgene_enrichment <- full_join(gwas_enrichment, ptgene_enrichment)
+fdr_cutoff = 0.1
+gwas_ptgene_enrichment <- gwas_ptgene_enrichment %>%
+  mutate(sig_ptgene_not_gwas = ifelse(p.adjust_ptgene < fdr_cutoff &
+                                        !p.adjust_gwas < fdr_cutoff, T, F),
+         sig_gwas_not_ptgene = ifelse(p.adjust_gwas < fdr_cutoff &
+                                        !p.adjust_ptgene < fdr_cutoff, T, F)) %>%
+  separate(GeneRatio_gwas, into = c("num_gwas", "den_gwas"), sep = "/") %>%
+  separate(GeneRatio_ptgene, into = c("num_ptgene", "den_ptgene"), sep = "/") %>%
+  mutate(ratio_gwas = as.numeric(num_gwas) / as.numeric(den_gwas),
+         ratio_ptgene = as.numeric(num_ptgene) / as.numeric(den_ptgene))
+gwas_ptgene_enrichment <- gwas_ptgene_enrichment %>%
+  mutate(ptgene_ratio_over_gwas_ratio = ratio_ptgene/ratio_gwas)
+
+gwas_ptgene_enrichment_filt <- gwas_ptgene_enrichment %>%
+  dplyr::filter(sig_ptgene_not_gwas |sig_gwas_not_ptgene) %>%
+  dplyr::select(Description, p.adjust_gwas, p.adjust_ptgene,
+                ratio_gwas, ratio_ptgene) %>%
+  pivot_longer(cols = -Description, names_to = "measure_gene_set",
+               values_to = "adj_p") %>%
+  separate(measure_gene_set,into = c("measure_type", "gene_set"), sep = "_") %>%
+  pivot_wider(names_from = measure_type, values_from = adj_p)
+
+
+gwas_ptgene_enrichment_filt$gene_set <- factor(gwas_ptgene_enrichment_filt$gene_set,
+                                                    ordered = T, 
+                                                    levels = c("ptgene", "gwas"))
+                                                    
+gwas_ptgene_enrichment_filt <- gwas_ptgene_enrichment_filt[order(gwas_ptgene_enrichment_filt$gene_set,
+                                             gwas_ptgene_enrichment_filt$p.adjust,
+                                             decreasing = F),]
+gwas_ptgene_enrichment_filt$Description <- factor(gwas_ptgene_enrichment_filt$Description,
+                                        ordered = T,
+                                        levels = unique(gwas_ptgene_enrichment_filt$Description))
+
+
+gwas_comparison <- ggplot(gwas_ptgene_enrichment_filt,
+       aes(y = gene_set, x = Description, size = -log10(p.adjust),
+           col = ratio)) +
+  geom_point() +
+#  geom_point(shape = "I", size = 4.5) +
+  theme_minimal() +
+  theme(text = element_text(size=5),
+        axis.text.x = element_text(angle = 90, vjust = 1, hjust=1, size = 5),
+        axis.text.y = element_text(size = 5),
+        panel.grid.major = element_line(size = 0.2, linetype = 'solid'))
+
+gwas_comparison
+
+ggsave(here("images/possible_supplementary_panels/gwas_and_ptgene_vs_wholegenome.pdf"),
+       gwas_comparison, width = 170, height = 100, units = 'mm')
+
+
+ptgenes_vs_gwas <- enrichPathway(gene = ptgenes, pvalueCutoff = 1, readable = T,
+                                 universe = all_genes)
+ptgenes_vs_gwas_df <- ptgenes_vs_gwas@result
+```
+```{r}
+ptgene_combine <- ptgene_df %>%
+  dplyr::select(locus, hit_spec, ENTREZID) %>%
+  group_by(locus) %>%
+  summarise(hit_spec = ifelse(sum(!is.na(hit_spec)) > 0, T, F),
+    ptGenes = paste(unique(ENTREZID)[!is.na(unique(ENTREZID))], collapse=","))
+
+true_ptgenes <- unnest_ptgenes(ptgene_combine)
+true_res <- get_enrichments(true_ptgenes, "true")
+
+num_sims = 2000
+num_hits = sum(ptgene_combine$hit_spec)
+set.seed=231
+sim_lists = c()
+for (i in 1:num_sims){
+  sim_hits = sample(ptgene_combine$locus, size = num_hits, replace = F)
+  sim_df <- ptgene_combine %>%
+    mutate(hit_spec = ifelse(locus %in% sim_hits, T, F))
+  sim_ptgenes <- list(unnest_ptgenes(sim_df))
+  names(sim_ptgenes) <- paste("trial", i, sep = "-")
+  sim_lists = c(sim_lists, sim_ptgenes)
+}
+
+numCores = 6
+registerDoParallel(numCores)  # use multicore, set to the number of our cores
+res <- foreach (trial = names(sim_lists), .combine=full_join) %dopar% {
+  get_enrichments_ponly(unlist(sim_lists[trial]), trial)
+}
+
+sim_res_save_2000 <- res
+true_res_df_2000 <- true_res
+true_res_df_2000$num_sims_more_extreme <- apply(true_res_df_2000, 1,
+              function(x) sum(x["pvalue_true"] >= res[res$ID == x["ID"],
+                                      grepl("pvalue", colnames(res))],
+                              na.rm=T))
+true_res_df_2000$num_sims <- num_sims
+true_res_df_2000 <- true_res_df_2000 %>%
+  mutate(empirical_pval = num_sims_more_extreme/num_sims)
+
+# rerun this, but for now use saved result
+# res_2000 <- read_tsv("~/Documents/CancerMPRA/NewReactomeEnrichments/sim_2000_results.tsv")
+
+write_tsv(true_res_df_2000, here("output/SupplementaryTables/reactome_enrichment_vs_sim_bg.tsv"))
+
+
+check_overlap <- lapply(sim_lists, function(x) sum(x %in% true_ptgenes))
+check_overlap_div <- unlist(check_overlap)/length(true_ptgenes)
+mean(check_overlap_div)
+```
+

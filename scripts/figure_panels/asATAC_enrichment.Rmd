@@ -1,0 +1,321 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(ggpubr)
+library(rstatix)
+```
+
+Enrichment improves with different (although not  orthogonal) strategies aimed at increasing quality of what gets called an asATAC variant.
+- Require higher coverage of variant (depth at least 50 for two alleles combined)
+- Require a lower p-value for the call (p<0.001 gives significant enrichment, as does p < 0.01 with depth filter of 50)
+- Require greater difference between alleles (ie (AD1)/(AD1+AD2) < 0.3 or > 0.7)
+
+Alternately, I can switch multiple comparison adjustment methods - anything but FDR leads to significant enrichment 
+This suggests to me with our dataset our asATAC calling method is not great at p < 0.05, depth > 10, no skew filter.
+
+Explored more thoroughly elsewhere (CancerMPRA/asATAC/asATAC_04182023.Rmd), but here keep it simple
+Bonferroni correct asATAC calls, asATAC_p < 0.01, enrichment_p < 0.05
+Across all tissues and just tissue specific 
+Make enrichment bar chart for figure
+Make pvalue plots for supplements
+
+
+Conclusions:
+Using bonferroni adjusted p < 0.01, allele_ratio more extreme than 0.5
+Non-tissue specific:
+p-value = 0.0358
+alternative hypothesis: true odds ratio is not equal to 1
+95 percent confidence interval:
+ 1.013442 3.663603
+sample estimates:
+odds ratio 
+  1.959937 
+  
+Tissue specific:
+data:  fisher_df
+p-value = 0.00583
+alternative hypothesis: true odds ratio is not equal to 1
+95 percent confidence interval:
+   1.645831 145.727260
+sample estimates:
+odds ratio 
+   12.3629 
+
+
+Read in Margaret's file with all snps, read in MPRA results table
+```{r}
+asatac_all <- read_csv(here("data/vcf_df_all_atac_7.14.21.csv"))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+```
+
+```{r}
+res_cut <- dplyr::select(res_merge, Causal_SNP, Chr_37, Start_37, disease,
+                         hit_spec, hit_any_celltype) %>% distinct()
+asatac_all <- asatac_all %>% dplyr::select(-`...1`)
+asatac_all <- dplyr::filter(asatac_all, !tissue %in% c("Bladder", "GM12878"))
+asatac_all <- asatac_all %>% mutate(Chr_37 = as.numeric(str_remove(CHROM, "chr")))
+# measured in different tissues, so this won't be a 1-1 matching
+asatac_join <- inner_join(res_cut, asatac_all, by = c("Chr_37"="Chr_37", "Start_37" = "POS"))
+```
+
+
+Split sample column into separate info by ":"
+Filter by DP >=10, one of AD >= 2, 
+GT = 0/1 for all already, so not filtering that
+FILTER only PASS or VSQR 99
+
+```{r}
+depth_filter = 10
+allele_count = 2
+
+aa_all <- asatac_join %>% separate(sample, into = c("GT", "AD", "DP","GQ", "PL"),sep=":", remove=F)
+aa_all$DP <- as.numeric(aa_all$DP)
+aa_all_filt <- dplyr::filter(aa_all, DP >= depth_filter)
+aa_all_filt <- aa_all_filt %>% separate(AD, sep=",", into=c("AD1", "AD2"), remove=F)
+aa_all_filt$AD1 <- as.numeric(aa_all_filt$AD1)
+aa_all_filt$AD2 <- as.numeric(aa_all_filt$AD2)
+aa_all_filt <- dplyr::filter(aa_all_filt, AD1 > allele_count | AD2 > allele_count)
+# changed from "\\."
+aa_all_filt <- dplyr::filter(aa_all_filt, !(FILTER == "."))
+
+```
+
+Run binomial test on AD1 and AD2
+binom.test(x, p = 0.5, alternative = “two.sided”, conf.level = 0.95)
+FDR correct
+```{r}
+aa_all_filt <- aa_all_filt %>% rowwise() %>%
+  mutate(as_pval = binom.test(c(AD1, AD2), p=0.5, alternative = "two.sided", conf.level=0.95)$p.value,
+         estimate = binom.test(c(AD1, AD2), p=0.5, alternative = "two.sided", conf.level=0.95)$estimate,
+         allele_ratio = min(AD1/AD2, AD2/AD1))
+
+aa_all_filt <- aa_all_filt %>% ungroup() %>%
+  mutate(p_adj = p.adjust(as_pval, method="bonferroni" ))
+                               
+```
+Merge with library
+Filter for only the ones that met the quality filters and where a pvalue for allelic skew could be assessed
+```{r}
+# cut out excess columns
+asatac_cut <- dplyr::select(aa_all_filt, Causal_SNP, disease, hit_spec, hit_any_celltype,
+                            Chr_37, Start_37, tissue, p_adj, allele_ratio, estimate)
+# filter for only those with a p value (the ones that met quality filters and could be assessed)
+asatac_cut <- asatac_cut %>% mutate(tissue_convert = case_when(
+  grepl("Breast|HMEC|BREAST|MAMM", tissue) ~ "hmec",
+  grepl("Eso|ESO", tissue) ~ "eso",
+  grepl("GDS", tissue) ~ "kc",
+  grepl("Renal", tissue) ~ "renal",
+  grepl("Airway", tissue) ~ "airway",
+  grepl("Ovar|OV", tissue) ~ "ov",
+  grepl("Panc|PANC", tissue) ~ "panc",
+  grepl("Melanocyte", tissue) ~ "mc",
+  grepl("Brain|Ast", tissue) ~ "ast",
+  grepl("Colon|COLON", tissue) ~ "colon",
+  grepl("Thyroid", tissue) ~ "thy",
+  grepl("Uter", tissue) ~ "endo",
+  grepl("Pros", tissue) ~ "pros"))
+
+# what if I unnest hit and disease
+asatac_tiss <- asatac_cut %>% mutate(disease = str_split(disease, ",")) %>%
+  unnest(disease) %>%
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec)
+# removing the differentiated KCs - the MPRA was done in progenitors
+asatac_tiss <- dplyr::filter(asatac_tiss, !tissue %in% c("GDSD3", "GDSD6"))
+
+# now this includes snps with multiple diseases where the asatac is in the non-hit disease
+# filter those out
+# did the filtering a little wrong last time 
+# don't want to remove entries where !grepl(disease, hit_spec)
+# want to change hit_spec to NA in that case so it counts against the tissue specific count
+# ie, dis = colon,endo, hit_spec = endo, asatac=colon should become:
+# dis = colon,endo, hit_spec = NA, asatac=colon
+asatac_tiss <- asatac_tiss %>% rowwise() %>% dplyr::filter(disease == tissue_convert)
+asatac_tiss <- asatac_tiss %>% rowwise() %>%
+  mutate(hit_spec = case_when(
+    is.na(hit_spec) ~ hit_spec,
+    disease == hit_spec ~ hit_spec,
+    T ~ NA))
+  
+```
+
+
+```{r}
+p_cut = 0.01
+allele_ratio_cut = 0.5
+# est_cut = 0.3
+# asatac_tiss <- asatac_tiss %>%
+#  mutate(asatac_hit = ifelse(p_adj < p_cut & (estimate < est_cut |
+#                                                estimate > 1-est_cut), T, F))
+
+asatac_tiss <- asatac_tiss %>%
+  mutate(asatac_hit = ifelse(p_adj < p_cut & allele_ratio <= allele_ratio_cut, T, F))
+
+
+fisher_df <- data.frame(in_asatac = c(sum(asatac_tiss$asatac_hit & !is.na(asatac_tiss$hit_spec)),
+                                      sum(asatac_tiss$asatac_hit & is.na(asatac_tiss$hit_spec))),
+                        not_asatac = c(sum(!asatac_tiss$asatac_hit & !is.na(asatac_tiss$hit_spec)),
+                                       sum(!asatac_tiss$asatac_hit & is.na(asatac_tiss$hit_spec))))
+fisher.test(fisher_df)
+
+tiss_fisher_p <- fisher.test(fisher_df)$p.value
+
+```
+
+
+Try the non-tissue filtered variants
+```{r}
+p_cut = 0.01
+allele_ratio_cut = 0.5
+as_lib_filt_all <- dplyr::filter(asatac_cut, !is.na(p_adj))
+
+as_lib_filt_grp <- as_lib_filt_all %>% group_by(Causal_SNP) %>%
+  summarise(mpra_hit = ifelse(sum(is.na(hit_spec)) < length(hit_spec), T, F),
+            asatac_hit = ifelse(sum(p_adj < p_cut & allele_ratio <= allele_ratio_cut) > 0, T, F))
+fisher_df_all <- data.frame(in_asatac = c(sum(as_lib_filt_grp$asatac_hit & as_lib_filt_grp$mpra_hit),
+                                          sum(as_lib_filt_grp$asatac_hit & !as_lib_filt_grp$mpra_hit)),
+                            not_asatac = c(sum(!as_lib_filt_grp$asatac_hit & as_lib_filt_grp$mpra_hit),
+                                           sum(!as_lib_filt_grp$asatac_hit & !as_lib_filt_grp$mpra_hit)))
+fisher.test(fisher_df_all)
+
+nontiss_fisher_p <- fisher.test(fisher_df_all)$p.value
+
+```
+Format supplementary table
+```{r}
+supp_df <-  dplyr::select(aa_all_filt, Causal_SNP,Chr_37, Start_37, REF, ALT,
+                          Cancer = disease, hit_spec, hit_any_celltype,
+                             tissue, p_adj, estimate)
+
+write_tsv(supp_df, here("output/SupplementaryTables/asATAC_results.tsv"))
+
+asatac_cut <- dplyr::select(aa_all_filt, Causal_SNP, disease, hit_spec, hit_any_celltype,
+                            Chr_37, Start_37, tissue, p_adj, allele_ratio, estimate)
+# filter for only those with a p value (the ones that met quality filters and could be assessed)
+asatac_cut <- asatac_cut %>% mutate(tissue_convert = case_when(
+  grepl("Breast|HMEC|BREAST|MAMM", tissue) ~ "hmec",
+  grepl("Eso|ESO", tissue) ~ "eso",
+  grepl("GDS", tissue) ~ "kc",
+  grepl("Renal", tissue) ~ "renal",
+  grepl("Airway", tissue) ~ "airway",
+  grepl("Ovar|OV", tissue) ~ "ov",
+  grepl("Panc|PANC", tissue) ~ "panc",
+  grepl("Melanocyte", tissue) ~ "mc",
+  grepl("Brain|Ast", tissue) ~ "ast",
+  grepl("Colon|COLON", tissue) ~ "colon",
+  grepl("Thyroid", tissue) ~ "thy",
+  grepl("Uter", tissue) ~ "endo",
+  grepl("Pros", tissue) ~ "pros"))
+
+# what if I unnest hit and disease
+asatac_tiss <- asatac_cut %>% mutate(disease = str_split(disease, ",")) %>%
+  unnest(disease) %>%
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec)
+# removing the differentiated KCs - the MPRA was done in progenitors
+asatac_tiss <- dplyr::filter(asatac_tiss, !tissue %in% c("GDSD3", "GDSD6"))
+
+# now this includes snps with multiple diseases where the asatac is in the non-hit disease
+# filter those out
+# did the filtering a little wrong last time 
+# don't want to remove entries where !grepl(disease, hit_spec)
+# want to change hit_spec to NA in that case so it counts against the tissue specific count
+# ie, dis = colon,endo, hit_spec = endo, asatac=colon should become:
+# dis = colon,endo, hit_spec = NA, asatac=colon
+asatac_tiss <- asatac_tiss %>% rowwise() %>% dplyr::filter(disease == tissue_convert)
+asatac_tiss <- asatac_tiss %>% rowwise() %>%
+  mutate(hit_spec = case_when(
+    is.na(hit_spec) ~ hit_spec,
+    disease == hit_spec ~ hit_spec,
+    T ~ NA))
+```
+
+
+```{r}
+plot_fisher_asa <- fisher_df %>%
+  mutate(mpra_hit = c("Active", "Inactive")) %>%
+  pivot_longer(cols = c(in_asatac, not_asatac),
+               names_to = "asatac",
+               values_to = "snps") %>%
+  mutate(asatac = ifelse(asatac == "in_asatac", T, F))
+colnames(plot_fisher_asa) <- c("MPRA activity", "asATAC", "SNPs")
+plot_fisher_asa$`MPRA activity` <- factor(plot_fisher_asa$`MPRA activity`, 
+                                      levels = c("Inactive", "Active"),
+                                      ordered = T)
+```
+
+
+```{r}
+plot_fisher_asa_all <- fisher_df_all %>%
+  mutate(mpra_hit = c("Active", "Inactive")) %>%
+  pivot_longer(cols = c(in_asatac, not_asatac),
+               names_to = "asatac",
+               values_to = "snps") %>%
+  mutate(asatac = ifelse(asatac == "in_asatac", T, F))
+colnames(plot_fisher_asa_all) <- c("MPRA activity", "asATAC", "SNPs")
+
+plot_fisher_asa_all$analysis <- "Any tissue"
+plot_fisher_asa$analysis <- "Tissue-specific"
+
+plot_fisher <- rbind(plot_fisher_asa, plot_fisher_asa_all)
+plot_fisher <- plot_fisher %>%
+  mutate(x_axis = paste(`MPRA activity`, analysis, sep = "_"))
+plot_fisher$x_axis <- factor(plot_fisher$x_axis,
+                             levels = c("inactive_all", "active_all",
+                                        "inactive_tissue", "active_tissue"),
+                             ordered = T)
+
+```
+
+```{r}
+stat.test <- data.frame(
+  analysis = c("Any tissue", "Tissue-specific"),
+  .y. = "SNPs",
+  group1 = "Inactive",
+  group2 = "Active",
+  p = c(nontiss_fisher_p, tiss_fisher_p),
+  y.position = 0.27,
+  xmin = 1,
+  xmax = 2,
+  asATAC = T)
+  
+stat.test <- stat.test %>%
+  add_significance()
+
+
+g <- ggplot(plot_fisher, aes(x = `MPRA activity`, y = SNPs, fill = `asATAC`))  +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("Proportion of SNPs") +
+  theme_minimal() + scale_fill_manual(values = c("NA", "black")) +
+  theme(axis.title = element_text(size = 5, family = "Helvetica"),
+    axis.text.x = element_text(size = 5, angle = 45, family = "Helvetica"),
+    legend.text = element_text(size =5, family = "Helvetica"),
+    legend.title = element_text(size = 5, family = "Helvetica"),
+    axis.text.y = element_text(size = 5, family = "Helvetica"),
+    legend.key.size = unit(0.2, 'cm'),
+    line=element_line(linewidth=0.2)) +
+  facet_wrap(analysis ~.) +
+#  ylim(0, 0.5) +
+  theme(strip.text = element_text(size = 5, family = "Helvetica"),
+        strip.background = element_rect(color=NA, 
+                                        fill=NA, size=0.3, linetype="solid")) +
+  coord_cartesian(ylim=c(0, 0.3))
+
+g
+g + stat_pvalue_manual(stat.test, label = "p.signif", tip.length = 0,
+                       vjust = 0.6)
+  
+
+ggsave(here("images/figure_panels/asATAC_enrichment.pdf"),
+            width = 44, height = 44, units = 'mm')
+```
+

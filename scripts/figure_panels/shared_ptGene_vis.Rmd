@@ -1,0 +1,101 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+```
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+```
+
+
+```{r}
+egene_mat <- res_merge  %>% filter(!is.na(hit_spec)) %>%
+  dplyr::select(hit_spec, eqtlgen_egenes, gtex_egenes_spec, hichip_egene,
+                genes_within_10kb)
+egene_mat <- pivot_longer(egene_mat, cols = c(eqtlgen_egenes, gtex_egenes_spec,
+                                              hichip_egene,genes_within_10kb),
+                names_to = "source",
+                          values_to = "ptgene")
+egene_mat <- egene_mat %>% mutate(ptgene = str_split(ptgene, ",|;")) %>%
+  unnest(cols = c(ptgene))
+egene_mat <- egene_mat %>% mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(cols = c(hit_spec))
+egene_mat <- dplyr::filter(egene_mat, !is.na(ptgene))
+egene_mat <- egene_mat %>% group_by(ptgene) %>% 
+  summarise(source = ifelse(length(unique(source)) > 1, "multiple",source ),
+            hit_spec = paste(unique(sort(hit_spec)), collapse=","))
+egene_mat <- egene_mat %>% mutate(hit_spec_2 = hit_spec)
+
+egene_mat <- egene_mat %>% mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(cols = c(hit_spec))
+egene_mat <- egene_mat %>%
+  mutate(source = case_when(
+    source == "eqtlgen_egenes" ~ "eQTLgen",
+    source == "multiple" ~ "Multiple",
+    source == "gtex_egenes_spec" ~ "GTEx",
+    source == "hichip_egene" ~ "HiChIP",
+    source == "genes_within_10kb" ~ "Nearby"))
+# egene_mat <- egene_mat %>% mutate(yes_or_no = 1)
+# egene_mat <- pivot_wider(egene_mat, names_from = hit_spec, values_from=yes_or_no )
+egene_mat <- pivot_wider(egene_mat, names_from = hit_spec, values_from=source )
+
+egene_mat[is.na(egene_mat)] <- "None"
+
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+mat <- dplyr::select(egene_mat, -hit_spec_2)
+
+get_name <- function(x, key){
+  return(key$display_name[key$celltype == x])
+}
+colnames(mat) <- c("ptgene", sapply(colnames(mat[2:14]), get_name, name_key))
+
+num_genes = sort(apply(mat, 2, function(x) sum(!x == "None")), decreasing = T)
+# sort columns by most egenes
+mat <- dplyr::select(mat, ptgene, names(num_genes))
+mat$num_celltypes  <- apply(dplyr::select(mat, -ptgene), 1, 
+                            function(x) sum(x == "None"))
+
+mat <- mat %>%
+  mutate(across(!ptgene & !num_celltypes, 
+                function(x) factor(x, levels = c("Multiple", "eQTLgen",
+                                                 "HiChIP", "GTEx",
+                                                 "Nearby", "None"),
+                                   ordered = T)))
+
+
+mat <- mat[order(mat$num_celltypes, mat$HMEC, mat$Airway, mat$Colon, mat$Prostate,
+                   mat$Endometrial, mat$Ovarian, mat$MC, mat$KC,
+                   mat$Astrocyte, mat$Esophageal, mat$Thyroid, mat$Pancreatic,
+                   mat$Renal),]
+plot_mat <- dplyr::select(mat, -num_celltypes)
+shared_plot <- Heatmap(column_to_rownames(plot_mat, "ptgene"),
+        col = c("turquoise4", "firebrick3", "deepskyblue1",
+                                         "black", "mediumpurple",
+                                         "white"),
+        show_row_names = F,
+        heatmap_width = unit(20, 'mm'),
+        heatmap_height = unit(50, 'mm'),
+        heatmap_legend_param = list(title = "Source",
+                                    title_gp = gpar(fontsize = 5,
+                                                    fontface = "bold",
+                                                    family = "Helvetica"),
+                                    labels_gp = gpar(fontsize = 5,
+                                                     family = "Helvetica"),
+                                    legend_height = unit(20, 'mm'),
+                                    grid_width = unit(2, 'mm')),
+        column_names_gp = gpar(fontsize = 5, family = "Helvetica"))
+shared_plot
+
+pdf(here('images/figure_panels/shared_gene_source_heatmap.pdf'))
+draw(shared_plot)
+dev.off()
+
+```
+

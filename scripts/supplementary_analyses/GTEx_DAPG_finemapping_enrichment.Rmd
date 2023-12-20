@@ -1,0 +1,180 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+```
+
+Testing fine-mapped eQTLs
+DAP-G
+https://gtexportal.org/home/datasets
+From Fine-mapping cis-eQTL data
+
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+variant_id_df <- read_tsv(here("output/putative_causal_snps_gtex_variant_ids.tsv"))
+res_merge <- left_join(res_merge, dplyr::select(variant_id_df, locus, Causal_SNP, variant_id))
+```
+
+
+Trying DAP-G
+From GTEx downloads section, associated with Wen et al Plos Genetics 2017
+```{r}
+dapg <- read_tsv(here("data/GTEx_v8_finemapping_DAPG/GTEx_v8_finemapping_DAPG.vcf.gz"),
+                 col_names = c("chrom", "pos", "variant_id", "ref", "alt", "entry"))
+
+dapg <- dplyr::filter(dapg, variant_id %in% res_merge$variant_id)
+```
+From the README:
+These records provide the complete eQTL information on the target SNP with respect to all genes and all tissues.  Each record has the following format
+signal_id@tissue_name= PIP[SPIP:size_of_cluster]
+More specifically,
+ + signal_id: ID of a signal cluster. It consists of the name of the gene and the signal index separated by ":". e.g., ENSG00000238009:3 indicates the signal is the third signal from gene ENSG00000238009
+ + tissue_name: name of the tissue where the SNP is investigated
+ + PIP: SNP posterior inclusion probability. Higer PIP value indicates the SNP is more likely to be the casual eQTL.
+ + SPIP: signal-level posterior_inclusion probability (sum of the PIPs from all members of the signal cluster)
+ + size_of_cluster: number of SNPs in the signal cluster. These member SNPs are in LD, all represent the same underlying association signal
+
+```{r}
+dapg <- dapg %>% mutate(entry = str_split(entry, "\\|")) %>%
+  unnest(entry)
+
+dapg <- dapg %>% mutate(signal_id = str_remove(entry, "@.*$"),
+                        gene = str_remove(entry, ":.*$"),
+                        tissue = str_remove(str_remove(entry, "^.*@"), "=.*$"),
+                        pip = str_remove(str_remove(entry, "^.*="), "\\[.*$"),
+                        spip = str_remove(str_remove(entry, "^.*\\["), ":.*$"),
+                        cluster_size = str_remove(str_remove(entry, ".*:"), "\\].*$"))
+dapg <- dapg %>% mutate(pip = as.numeric(pip),
+                        spip = as.numeric(spip))
+
+```
+Try getting the signal_id list then taking everything in DAPG associated with that signal id - to compare to all associated variants 
+
+```{r}
+res_cut <- res_merge %>%  mutate(disease = str_split(disease, ","))
+res_cut <- res_cut %>% unnest(disease)
+res_cut$logFC <- apply(res_cut, 1, 
+               function(x) x[paste0(x[["disease"]], "_logFC")])
+
+res_cut$fdr <- apply(res_cut, 1, 
+               function(x) x[paste0(x[["disease"]], "_fdr")])
+res_cut <- dplyr::select(res_cut, locus, Causal_SNP, variant_id, disease, gtex_egenes_all, gtex_egenes_spec, hit_any_celltype, hit_spec, fdr, logFC)
+res_cut <- res_cut %>% mutate_at(vars(fdr, logFC), as.numeric)
+
+res_long <- res_merge[c(1, 45, 53, 71:73, grep("fdr", colnames(res_merge)))]
+res_long <- res_long %>%
+  pivot_longer(cols = -c(locus, Causal_SNP, disease, hit_any_celltype, hit_spec,
+                         variant_id),
+                         names_to = "mpra_celltype", values_to = "fdr")
+res_long <- res_long %>%
+  mutate(mpra_celltype = str_remove(mpra_celltype, "_fdr"))
+```
+
+Get the DAPG fine mapped eQTLs associated with any signal associated with any SNP in the MPRA
+```{r}
+keep_assoc <- unique(dapg$signal_id)
+dapg_alt <- read_tsv(here("data/GTEx_v8_finemapping_DAPG/GTEx_v8_finemapping_DAPG.vcf.gz"),
+                 col_names = c("chrom", "pos", "variant_id", "ref", "alt", "entry"))
+dapg_alt <- dapg_alt %>% mutate(signal_name = str_remove(entry, "@.*"))
+
+dapg_alt <- dplyr::filter(dapg_alt, signal_name %in% keep_assoc)
+
+dapg_alt <- dapg_alt %>% mutate(entry = str_split(entry, "\\|")) %>%
+  unnest(entry)
+
+dapg_alt <- dapg_alt %>% mutate(signal_id = str_remove(entry, "@.*$"),
+                        gene = str_remove(entry, ":.*$"),
+                        tissue = str_remove(str_remove(entry, "^.*@"), "=.*$"),
+                        pip = str_remove(str_remove(entry, "^.*="), "\\[.*$"),
+                        spip = str_remove(str_remove(entry, "^.*\\["), ":.*$"),
+                        cluster_size = str_remove(str_remove(entry, ".*:"), "\\].*$"))
+dapg_alt <- dapg_alt %>% mutate(pip = as.numeric(pip),
+                        spip = as.numeric(spip))
+
+dapg_alt <- dplyr::filter(dapg_alt, signal_name %in% keep_assoc)
+
+# throws a warning: NAs introduced by coercion error
+# it's coming from 52 entries that don't have spip
+# looks like those entries just dont end with the [number] like the others
+# ignoring
+```
+
+
+```{r}
+res_long_merge <- left_join(res_long, dplyr::select(dapg_alt, variant_id, signal_id, gene, tissue, pip, spip, cluster_size))
+res_long_merge <- res_long_merge %>% 
+  mutate(tissue_convert = case_when(
+  grepl("Breast|HMEC|BREAST|MAMM", tissue) ~ "hmec",
+  grepl("Eso|ESO", tissue) ~ "eso",
+  grepl("Keratinocyte|KC|Skin", tissue) ~ "kc,mc",
+  grepl("Kidney|KIDNEY", tissue) ~ "renal",
+  grepl("Lung|NHBE|LUNG", tissue) ~ "airway",
+  grepl("Ovary|OV", tissue) ~ "ov",
+  grepl("Panc|PANC", tissue) ~ "panc",
+  grepl("Melanocyte", tissue) ~ "mc",
+  grepl("Brain|Ast", tissue) ~ "ast",
+  grepl("Colon|COLON", tissue) ~ "colon",
+  grepl("Thyroid", tissue) ~ "thy",
+  grepl("Uterus", tissue) ~ "endo",
+  grepl("Pros", tissue) ~ "pros"))
+# correlation, no regard for celltype
+cor.test(-log10(res_long_merge$fdr), res_long_merge$pip)
+# 0.096
+res_long_merge <- res_long_merge %>%
+  mutate(tissue_convert = str_split(tissue_convert, ",")) %>%
+  unnest(tissue_convert)
+res_long_merge_filt <- dplyr::filter(res_long_merge, tissue_convert == mpra_celltype )
+# correlation between all MPRA results in the same celltype as the DAPG eQTL
+cor.test(-log10(res_long_merge_filt$fdr), res_long_merge_filt$pip)
+# 0.101
+res_long_merge_filt_any_hit <- res_long_merge_filt %>%
+  mutate(hit_any_celltype = str_split(hit_any_celltype, ",")) %>%
+  unnest(hit_any_celltype) %>%
+  distinct() %>%
+  dplyr::filter(hit_any_celltype == tissue_convert)
+cor.test(-log10(res_long_merge_filt_any_hit$fdr), res_long_merge_filt_any_hit$pip)
+# 0.203
+res_long_merge_filt_hit_spec <- res_long_merge_filt %>%
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec) %>%
+  distinct() %>%
+  dplyr::filter(hit_spec == tissue_convert)
+# correlation only for daSNVs in the same celltype
+cor.test(-log10(res_long_merge_filt_hit_spec$fdr), res_long_merge_filt_hit_spec$pip)
+# 0.416
+
+```
+
+```{r}
+hist_df <- rbind(data.frame(pip = res_long_merge_filt_hit_spec$pip,
+                            dataset = "dasnv"),
+                 data.frame(pip = res_long_merge_filt_any_hit$pip,
+                            dataset = "any_hit"),
+                 data.frame(pip = res_long_merge_filt$pip,
+                            dataset = "all"))
+pip_density <- ggplot(hist_df, aes(x = log10(pip), col = dataset)) + 
+  geom_density(linewidth = 0.3) +
+  theme_minimal() +
+  scale_color_manual(values = c( "grey70","grey30", "red")) +
+  geom_vline(xintercept = median(log10(res_long_merge_filt_hit_spec$pip)),col = "red",
+             linetype="dashed", linewidth=0.3) +
+  geom_vline(xintercept = median(log10(res_long_merge_filt$pip)),col = "grey70",
+             linetype="dashed", linewidth=0.3) +
+  geom_vline(xintercept = median(log10(res_long_merge_filt_any_hit$pip)),col = "grey30",
+             linetype="dashed", linewidth=0.3) +
+  ggtitle("DAP-G Posterior Inclusion Probabilities") +
+  theme(text = element_text(size = 7, family = "Helvetica"))
+
+pip_density
+ggsave(filename = here("images/possible_supplementary_panels/dapg_PIP_hist.pdf"),
+                       plot = pip_density, width = 110, height = 60, units = 'mm')
+
+
+```

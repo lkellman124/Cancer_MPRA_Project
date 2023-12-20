@@ -1,0 +1,144 @@
+---
+title: "mpranalyze_merging_lib_background_info"
+author: "Laura Kellman"
+date: "9/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+Merge together the MPRAnalyze comparative results with the lib background information - SNP, alleles, lead SNP, GWAS risk allele, etc
+
+```{r}
+res <- read_tsv(here("output/mpranalyze_comparative_v1.8.0_results.tsv"))
+full_lib <- read_tsv(here("output/lib_studies_idmerge_diseasesreannotated_gwasrisk.tsv"))
+
+res_merge <- left_join(res, full_lib, by=c("locus" = "locus"))
+
+fdr_vars <- colnames(res_merge)[grepl("fdr", colnames(res_merge))]
+fc_vars <- colnames(res_merge)[grepl("logFC", colnames(res_merge))]
+res_merge <- res_merge %>% rowwise() %>% 
+  mutate_at(all_of(fdr_vars), function(x) ifelse(is.na(x), 1, x))%>%
+  mutate_at(all_of(fc_vars), function(x) ifelse(is.na(x), 0, x))
+
+```
+
+```{r}
+res_lead <- res_merge %>% 
+  dplyr::select(locus, leadSNP, Lead_SNP_expanded) %>%
+  pivot_longer(cols = c("leadSNP", "Lead_SNP_expanded"),
+               names_to = "source",
+               values_to = "lead_snp") %>%
+  mutate(lead_snp = str_split(lead_snp, ",|;")) %>%
+  unnest(cols = "lead_snp") %>%
+  dplyr::select(-source) %>%
+  distinct() %>%
+  group_by(locus) %>%
+  summarise(lead_snp = paste(sort(lead_snp), collapse = ","))
+
+res_lead <- res_lead %>% 
+  dplyr::mutate(lead_snp = str_remove(lead_snp, ",NA$"))
+
+res_merge <- left_join(res_merge, res_lead)
+```
+
+```{r}
+gwas <- read_tsv(here("data/gwas_catalog_v1.0-associations_e109_r2023-06-03.tsv"),
+                 col_types = rep("c", 34))
+gwas_filt <- gwas %>%
+  mutate(year = str_remove(`DATE ADDED TO CATALOG`, "-.*")) %>%
+  mutate(year = as.numeric(year)) %>%
+  dplyr::filter(year < 2019)
+gwas_filt <- gwas_filt %>%
+    mutate(lead_snp = str_split(SNPS, " x |;"))
+
+gwas_cancer_filt <- dplyr::filter(gwas_filt, grepl("ancer|arcinoma|denocarcinoma|ymphoma|elanoma|lioma|lioblastoma", `DISEASE/TRAIT`))
+gwas_cancer_filt <- dplyr::filter(gwas_cancer_filt, !grepl("Cholangiocarcinoma|Oropharynx|Oral cavity|head and neck|menopause|epatitis|Body mass index|epatocellular|cardiotoxicity|hepatotoxicity|Nasopharyngeal|Non-cardia gastric|Laryngeal|alopecia|^Gastric cancer$|Urinary symptoms|Testicular|Gallbladder|Erectile dysfunction|neuropathy|LVEF|Estrone|estrone|Toxicity|myelosuprression|Obesity|Plasma|plasma|esponse|disposition|urvival|interval", `DISEASE/TRAIT`))
+
+gwas <- gwas_cancer_filt
+
+# one snp is rs145108385 in GWAS and rs13169563 in our results, convert GWAS to ours
+gwas <- dplyr::select(gwas, PUBMEDID, STUDY, `DISEASE/TRAIT`,
+                      `STRONGEST SNP-RISK ALLELE`, SNPS,
+                      `P-VALUE`, `OR or BETA`) %>%
+  mutate(lead_snp = str_split(SNPS, " x |;")) %>%
+  unnest(cols = "lead_snp") %>%
+   mutate(lead_snp = case_when(
+    lead_snp == "rs145108385" ~ "rs13169563",
+    lead_snp == "rs67682613" ~ "rs622076",
+    T ~ lead_snp))
+gwas <- distinct(gwas)
+gwas_sum <- gwas %>% group_by(lead_snp) %>%
+  summarise(
+    PUBMEDID = PUBMEDID[which.min(`P-VALUE`)],
+    STUDY = STUDY[which.min(`P-VALUE`)],
+    `STRONGEST SNP-RISK ALLELE` = `STRONGEST SNP-RISK ALLELE`[which.min(`P-VALUE`)],
+    `OR or BETA` = `OR or BETA`[which.min(`P-VALUE`)],
+    `P-VALUE` = `P-VALUE`[which.min(`P-VALUE`)])
+
+
+lead_snps <- unique(unlist(str_split(res_merge$lead_snp, ",")))
+gwas_filt <- gwas %>% dplyr::filter(lead_snp %in% lead_snps)
+gwas_filt <- dplyr::filter(gwas_filt, grepl("cancer|Cancer|elanoma|adenocarcinoma|lioma|lioblastoma|carcinoma", `DISEASE/TRAIT`))
+
+gwas_disease <- gwas_filt %>% 
+  mutate(gwas_disease = case_when(
+    `DISEASE/TRAIT` == "Colorectal or endometrial cancer" ~ "colon,endo",
+    grepl("eratinocyte|Non-melanoma", `DISEASE/TRAIT`) ~ "kc",
+    `DISEASE/TRAIT` %in% c("Squamous cell carcinoma (MTAG)", "Basal cell carcinoma (MTAG)",
+                           "Basal cell carcinoma", "Squamous cell carcinoma",
+                           "Skin cancer", "Cutaneous squamous cell carcinoma") ~ "kc",
+    grepl("elanoma", `DISEASE/TRAIT`) ~ "mc",
+    grepl("lung|Lung", `DISEASE/TRAIT`) ~ "airway",
+    grepl("Adenocarcinoma in never smokers", `DISEASE/TRAIT`) ~ "airway",
+    `DISEASE/TRAIT` == "Adenocarcinoma" ~ "airway",
+    grepl("Prostate|prostate", `DISEASE/TRAIT`) ~ "pros",
+    grepl("lioblastoma|lioma", `DISEASE/TRAIT`) ~ "ast",
+    grepl("olorectal|olon", `DISEASE/TRAIT`) ~ "colon",
+    grepl("ndometrial", `DISEASE/TRAIT`) ~ "endo",
+    grepl("breast|Breast", `DISEASE/TRAIT`) ~ "hmec",
+    grepl("Esophageal|sophag", `DISEASE/TRAIT`) ~ "eso",
+    grepl("hyroid", `DISEASE/TRAIT`) ~ "thy",
+    grepl("Renal|renal", `DISEASE/TRAIT`) ~ "renal",
+    grepl("Pancreatic|ancreatic", `DISEASE/TRAIT`) ~ "panc",
+    grepl("varian", `DISEASE/TRAIT`) ~ "ov"))
+
+
+res_check <- dplyr::select(res_merge, Causal_SNP, lead_snp, leadSNP,
+                                         Lead_SNP_expanded, disease_expanded,
+                                         Tissue) %>%
+  mutate(lead_snp = str_split(lead_snp, ",")) %>%
+  unnest(cols = "lead_snp")
+disease_check <- left_join(res_check,
+                           dplyr::select(gwas_disease, lead_snp, gwas_disease))
+
+disease_check_study <- left_join(disease_check, gwas_sum)
+disease_check_coll <- disease_check_study %>% group_by(Causal_SNP) %>%
+  summarise_all(function(x) paste(sort(unique(unlist(str_split(x, ",|;")))), collapse = ","))
+
+disease_check_coll <- disease_check_coll %>% ungroup() %>% rowwise() %>%
+  mutate(PUBMEDID = paste(unlist(str_split(PUBMEDID, ",")), sep = ";", collapse = ";"))
+
+
+res_merge <- full_join(res_merge, dplyr::select(disease_check_coll, Causal_SNP, disease = gwas_disease,
+                                                PUBMEDID, STUDY, `STRONGEST SNP-RISK ALLELE`,
+                                                `OR or BETA`, `P-VALUE`),
+                       by = "Causal_SNP")
+
+```
+
+
+```{r}
+res_merge <- dplyr::select(res_merge, -leadSNP, -Lead_SNP_expanded, -disease_expanded, -Tissue)
+```
+
+```{r}
+write_tsv(res_merge, here("output/res_merge_gwas_bg.tsv"))
+
+```
+
+

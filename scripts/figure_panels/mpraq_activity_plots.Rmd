@@ -1,0 +1,500 @@
+---
+title: "MPRAnalyze quantitative activity plots"
+output: html_document
+date: "2023-06-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(here)
+```
+
+Activity plots
+
+Reviewer said:
+"On page 5, it is stated that 7.2 to 24.8% of all sequences were found to be significantly active compared to negative controls, with a reference to Data S1. I recommend showing the number of positive sequences in a main figure, ideally separately for each cell type and for native sequences and cancer risk SNVs, and in comparison to the positive controls. Note that Fig. S2b is partly circular because they compare MPRA results for active and inactive sequences, classified using the same MPRA data (via p.mad cutoffs)."
+
+Want to show: number significantly active, separately for each cell types
+Possible groups:
+Motif
+Positive
+Scramble
+Closed chromatin in that cell type?
+SNPs associated with that cell type
+All SNPs
+
+FDR adjust
+
+```{r}
+# mpranalyze quantitative results
+mpraq <- read_tsv(here("output/mpranalyze_quantitative_results.tsv"))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+```
+
+```{r}
+mpraq <- left_join(mpraq, distinct(dplyr::select(res_merge, locus, disease)))
+```
+
+
+```{r}
+mpraq_plot <- mpraq %>% 
+  mutate(seq_type = case_when(oligo_type == "motif" ~ "motif",
+                   oligo_type == "scramble" ~ "scramble",
+                   oligo_type %in% c("alt", "ref") ~ "SNP"))
+mpraq_plot <- mpraq_plot %>%
+  mutate(active_seq = ifelse(fdr < 0.05, "Active", "Inactive"))
+mpraq_plot$active_seq <- factor(mpraq_plot$active_seq, 
+                                levels = c("Inactive", "Active"),
+                     ordered = T)
+
+mpraq_plot <- mpraq_plot %>% 
+  mutate(seq_type_2 = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    oligo_type == "motif" ~ "motif",
+                   oligo_type == "scramble" ~ "scramble",
+                   oligo_type %in% c("alt", "ref") ~ "SNP"))
+```
+
+
+
+```{r}
+cell_sep <- mpraq_plot %>% 
+  dplyr::select(-control, -zscore, -mad.score, -pval.mad,
+                -pval.zscore, -pval.empirical, -Ref, -Alt, -snp_sequence,
+                -fdr, -seq_type, -seq_type_2)
+
+cell_sep <- cell_sep %>%
+  mutate(hmec_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("hmec", disease) ~ "HMEC",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    airway_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("airway", disease) ~ "Airway",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    thy_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("thy", disease) ~ "Thyroid",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    colon_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("colon", disease) ~ "Colon",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    pros_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("pros", disease) ~ "Prostate",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    mc_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("mc", disease) ~ "MC",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    endo_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("endo", disease) ~ "Endometrial",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    ov_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("ov", disease) ~ "Ovarian",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    eso_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("eso", disease) ~ "Esophageal",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    kc_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("kc", disease) ~ "KC",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    panc_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("panc", disease) ~ "Pancreatic",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    renal_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("renal", disease) ~ "Renal",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    ast_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    grepl("ast", disease) ~ "Astrocyte",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"),
+    
+    lx_groups = case_when(
+    grepl("control_JM", locus) ~ "pos_control",
+    oligo_type == "motif" ~ "motif",
+    oligo_type == "scramble" ~ "scramble",
+    oligo_type %in% c("alt", "ref") ~ "SNP"))
+
+
+cell_sep$hmec_groups <- factor(cell_sep$hmec_groups, 
+                           levels = c("HMEC", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$airway_groups <- factor(cell_sep$airway_groups, 
+                           levels = c("Airway", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$thy_groups <- factor(cell_sep$thy_groups, 
+                           levels = c("Thyroid", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$colon_groups <- factor(cell_sep$colon_groups, 
+                           levels = c("Colon", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$pros_groups <- factor(cell_sep$pros_groups, 
+                           levels = c("Prostate", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$mc_groups <- factor(cell_sep$mc_groups, 
+                           levels = c("MC", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$endo_groups <- factor(cell_sep$endo_groups, 
+                           levels = c("Endometrial", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$ov_groups <- factor(cell_sep$ov_groups, 
+                           levels = c("Ovarian", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$eso_groups <- factor(cell_sep$eso_groups, 
+                           levels = c("Esophageal", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$kc_groups <- factor(cell_sep$kc_groups, 
+                           levels = c("KC", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$panc_groups <- factor(cell_sep$panc_groups, 
+                           levels = c("Pancreatic", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$renal_groups <- factor(cell_sep$renal_groups, 
+                           levels = c("Renal", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$ast_groups <- factor(cell_sep$ast_groups, 
+                           levels = c("Astrocyte", "SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+cell_sep$lx_groups <- factor(cell_sep$lx_groups, 
+                           levels = c("SNP", "scramble", "motif", 
+                                      "pos_control"), ordered = T)
+
+```
+
+
+```{r}
+seq_notch = 0.05
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "hmec"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_hmec <-  ggplot(dplyr::filter(cell_sep, celltype == "hmec"), 
+                     aes(x = hmec_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("HMEC")
+a_hmec
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "airway"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_airway <-  ggplot(dplyr::filter(cell_sep, celltype == "airway"), 
+                     aes(x = airway_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+   ylim(start, end) +
+  ggtitle("Airway")
+a_airway
+
+
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "colon"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+a_colon <-  ggplot(dplyr::filter(cell_sep, celltype == "colon"), 
+                     aes(x = colon_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+   ylim(start, end) +
+  ggtitle("Colon")
+a_colon
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "pros"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+a_pros <-  ggplot(dplyr::filter(cell_sep, celltype == "pros"), 
+                     aes(x = pros_groups, y = log2(statistic))) +
+   geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+   ylim(start, end) +
+  ggtitle("Prostate")
+a_pros
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "endo"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+a_endo <-  ggplot(dplyr::filter(cell_sep, celltype == "endo"), 
+                     aes(x = endo_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+     ylim(start, end) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ggtitle("Endometrial")
+a_endo
+
+
+grid_p <- grid.arrange(a_hmec, a_airway, a_colon, a_pros, a_endo, 
+             left = "log2(alpha)",
+             nrow = 1)
+ggsave(here("images/figure_panels/mpra_seq_activity_boxplot_yaxis_changed_fig1.pdf"),
+       grid_p,
+       width = 150, height = 40, units = "mm")
+```
+Make the rest of the cell types for supplements:
+```{r}
+seq_notch = 0.05
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "ast"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_ast <-  ggplot(dplyr::filter(cell_sep, celltype == "ast"), 
+                     aes(x = ast_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Astrocyte")
+a_ast
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "mc"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_mc <-  ggplot(dplyr::filter(cell_sep, celltype == "mc"), 
+                     aes(x = mc_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Melanocyte")
+a_mc
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "kc"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_kc <-  ggplot(dplyr::filter(cell_sep, celltype == "kc"), 
+                     aes(x = kc_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Keratinocyte")
+a_kc
+
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "eso"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_eso <-  ggplot(dplyr::filter(cell_sep, celltype == "eso"), 
+                     aes(x = eso_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Esophageal")
+a_eso
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "renal"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_renal <-  ggplot(dplyr::filter(cell_sep, celltype == "renal"), 
+                     aes(x = renal_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Renal")
+a_renal
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "ov"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_ov <-  ggplot(dplyr::filter(cell_sep, celltype == "ov"), 
+                     aes(x = ov_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Ovarian")
+a_ov
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "thy"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_thy <-  ggplot(dplyr::filter(cell_sep, celltype == "thy"), 
+                     aes(x = thy_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Thyroid")
+a_thy
+
+sig_seq = quantile(log2(cell_sep$statistic[cell_sep$celltype == "panc"]), seq(0, 1, seq_notch), na.rm=T)
+start = sig_seq[2]
+end = sig_seq[length(sig_seq) - 1]
+
+a_panc <-  ggplot(dplyr::filter(cell_sep, celltype == "panc"), 
+                     aes(x = panc_groups, y = log2(statistic))) +
+  geom_boxplot(outlier.size = 0.001, notch = F, linewidth = 0.1)+
+    xlab("") + ylab("") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 5, angle = 45, vjust = 1, hjust=1),
+        axis.text.y = element_text(size = 5),
+        plot.title = element_text(size = 7, hjust = 0.5)) +
+  ylim(start, end) +
+  ggtitle("Pancreatic")
+a_panc
+
+
+grid_supp <- grid.arrange(a_ast, a_mc, a_kc, a_eso, a_renal, a_ov, a_thy,a_panc,
+             left = "log2(alpha)",
+             nrow = 1)
+ggsave(here("images/possible_supplementary_panels/mpra_seq_activity_boxplot_supplementary_celltypes.pdf"),
+       grid_supp,
+       width = 220, height = 40, units = "mm")
+```
+
+
+Do a bar plot of number sig
+
+```{r}
+mpraq_plot_dis_filt_w_ctrls <- dplyr::filter(mpraq_plot, celltype == disease |
+                                       seq_type_2 %in% c("pos_control", "scramble")) %>%
+  rowwise() %>%
+  mutate(`Cell type` = case_when(
+    seq_type_2 == "pos_control" ~ "Pos Control",
+    seq_type_2 == "scramble" ~ "Scramble",
+    T ~  name_key$display_name[name_key$celltype == celltype]))
+
+active_bar_plot <- ggplot(mpraq_plot_dis_filt_w_ctrls, 
+                          aes(x = `Cell type`, fill = active_seq)) +
+  geom_bar() +
+  ylab("Number of SNPs") + xlab("") +
+  labs(fill = "Activity") +
+  scale_fill_manual(values = c("grey80", "black")) +
+  theme_minimal() + 
+  theme(text = element_text(size = 6, family = "Helvetica"),
+    axis.text.x = element_text(angle = 45, vjust = 0.8),
+            line=element_line(linewidth=0.2),
+        legend.text = element_text(size =5),
+        legend.title = element_text(size =6),
+        legend.key.size = unit(0.2, 'cm'))
+
+
+
+mpraq_plot_dis_filt <- dplyr::filter(mpraq_plot, celltype == disease) %>%
+  rowwise() %>%
+  mutate(`Cell type` = name_key$display_name[name_key$celltype == celltype])
+active_bar_plot <- ggplot(mpraq_plot_dis_filt, 
+                          aes(x = `Cell type`, fill = active_seq)) +
+  geom_bar() +
+  ylab("Number of SNPs") + xlab("") +
+  labs(fill = "Activity") +
+  scale_fill_manual(values = c("grey80", "black")) +
+  theme_minimal() + 
+  theme(text = element_text(size = 6, family = "Helvetica"),
+    axis.text.x = element_text(angle = 45, vjust = 0.8),
+            line=element_line(linewidth=0.2),
+        legend.text = element_text(size =5),
+        legend.title = element_text(size =6),
+        legend.key.size = unit(0.2, 'cm'))
+
+
+
+ggsave(here("images/figure_panels/mpra_active_seq_barplots_disease_filt.pdf"),
+       active_bar_plot,
+      width = 65, height = 40, units = "mm")
+
+
+```
+

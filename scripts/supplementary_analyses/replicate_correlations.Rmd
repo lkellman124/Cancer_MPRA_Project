@@ -1,0 +1,132 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-09-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(ComplexHeatmap)
+```
+
+```{r}
+counts <- read_tsv(here("data/nextseq_counts_111920.tsv"))
+counts <- dplyr::select(counts, -gm_1, -gm_2, -gm_3, -h9_1, -h9_2, -h9_3)
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+```
+Find the correlations between counts
+```{r}
+edit_colnames <- data.frame(orig_colnames = colnames(counts)) %>%
+  separate(orig_colnames, into = c("celltype", "replicate"),
+           sep = "_")
+edit_colnames <- left_join(edit_colnames, dplyr::select(name_key, celltype, display_name))
+edit_colnames <- edit_colnames %>% rowwise() %>%
+  mutate(rep_name = case_when(
+    celltype == "oligo" ~ "oligo",
+    celltype == "plasmid" & replicate == "3" ~ paste("Plasmid", "2", sep = "_"),
+    celltype == "plasmid" & replicate == "2" ~ paste("Plasmid", "1", sep = "_"),
+    T ~ paste(display_name, replicate, sep = "_")))
+colnames(counts) <- edit_colnames$rep_name
+
+count_cor <- cor(counts[c(2:34,37:45,35,36)])
+
+col_fun = circlize::colorRamp2(c(min(count_cor), max(count_cor)),
+                                colors = c("white", "firebrick3"))
+# originally 70mm x 70mm (heatmap_width, heatmap_height)
+p <- Heatmap(count_cor, cluster_rows = F, cluster_columns = F,
+             col = col_fun,
+        heatmap_width = unit(55, 'mm'),
+        heatmap_height = unit(60, 'mm'),
+        heatmap_legend_param = list(title = "Correlation",
+                                    title_gp = gpar(fontsize = 4,
+                                                    fontface = "plain",
+                                                    family = "Helvetica"),
+                                                    labels_gp = gpar(fontsize = 4,
+                                                                     family = "Helvetica"),
+                                                    legend_height = unit(15, 'mm')),
+        column_names_gp = gpar(fontsize = 4, family = "Helvetica"),
+        row_names_gp = gpar(fontsize = 4, family = "Helvetica"))
+
+p
+
+pdf(here('images/possible_supplementary_panels/count_correlation_heatmap.pdf'))
+draw(p)
+dev.off()
+
+```
+Find correlations between RNA/DNA
+1. Normalize to total counts/sequencing depth
+2. Divide RNA/DNA
+3. Aggregate over 10 barcodes
+```{r}
+counts_norm <- counts %>%
+  mutate(across(c(Airway_1:Thyroid_3), function(x) x/sum(x)))
+counts_norm <- counts_norm %>%
+  mutate(Plasmid = (Plasmid_1 + Plasmid_2)/2) %>%
+  dplyr::filter(!Plasmid == 0) %>%
+  mutate(across(Airway_1:Thyroid_3, function(x) x/Plasmid)) # %>%
+ # dplyr::select(-Plasmid_1, -Plasmid_2)
+counts_norm <- counts_norm %>%
+  mutate(locus_allele = str_remove(oligo, "_[0-9]+$"))
+
+counts_norm_grp <- counts_norm %>% group_by(locus_allele) %>%
+  summarise(across(Airway_1:Plasmid, sum))
+rna_dna_cor <- cor(counts_norm_grp[c(2:34,37:45, 35, 36)])
+
+col_fun = circlize::colorRamp2(c(min(rna_dna_cor), max(rna_dna_cor)),
+                                colors = c("white", "royalblue4"))
+rna_dna_p <- Heatmap(rna_dna_cor, cluster_rows = F, cluster_columns = F,
+             col = col_fun,
+             heatmap_width = unit(55, 'mm'),
+        heatmap_height = unit(60, 'mm'),
+        heatmap_legend_param = list(title = "Correlation",
+                                    title_gp = gpar(fontsize = 4,
+                                                    fontface = "plain",
+                                                    family = "Helvetica"),
+                                                    labels_gp = gpar(fontsize = 4,
+                                                                     family = "Helvetica"),
+                                                    legend_height = unit(15, 'mm')),
+        column_names_gp = gpar(fontsize = 4, family = "Helvetica"),
+        row_names_gp = gpar(fontsize = 4, family = "Helvetica"))
+
+pdf(here('images/possible_supplementary_panels/count_correlation_rnaoverdna_heatmap.pdf'))
+draw(rna_dna_p)
+dev.off()
+```
+Sequence representation
+```{r}
+counts_grp <- counts %>%
+  mutate(locus_allele = str_remove(oligo, "_[0-9]+$")) %>%
+  group_by(locus_allele) %>%
+  summarise(across(Airway_1:Thyroid_3, function(x) sum(x > 0)))
+
+counts_grp_long <- counts_grp %>%
+  pivot_longer(cols = -locus_allele, names_to = "replicate", values_to = "barcode_num")
+rep_order <- colnames(counts_grp)[c(2:34, 37:45, 35, 36)]
+counts_grp_long$replicate <- factor(counts_grp_long$replicate,
+                                    levels = rep_order,
+                                    ordered = T)
+bc_rep <- ggplot(counts_grp_long, aes(y = replicate, fill = as.factor(barcode_num))) + 
+  geom_bar() +
+  scale_fill_manual(values = c("white", "grey90", "grey80", "grey70",
+                               "grey60", "grey50", "grey40", "grey30", 
+                               "grey20", "grey10", "black")) +
+  theme_minimal() +
+  theme(text = element_text(size = 5),
+    axis.text.x = element_text(angle = 90, size = 5),
+    legend.key.size = unit(2, 'mm')) +
+      ylab("Number of SNVs") +
+  xlab("Replicate") +
+  labs(fill = "Barcode Number")
+    
+bc_rep
+ggsave(here('images/possible_supplementary_panels/barcode_representation_vertical.pdf'),
+       bc_rep,
+       width = 60, height = 65, units = "mm")
+# original width = 100, height = 40
+```
+
+

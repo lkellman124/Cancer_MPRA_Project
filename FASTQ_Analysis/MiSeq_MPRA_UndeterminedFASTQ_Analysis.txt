@@ -1,0 +1,133 @@
+Analyzing Tania's library
+
+Pipeline based off MiSeq_KCTest1_11.25.19, with new way to count
+Works for an Undetermined file containing read 1 with both indices (and UMI) in the header
+
+# 0. Unzip the file
+gunzip Undetermined_S0_L001_R1_001.fastq.gz > Undetermined_S0_L001_R1_001.fastq
+
+# 1. Take the indices and UMI out of the header and add them to the read. This makes a fasta file. 
+# Doing this because we need to filter out the reads that aren't from the target sample, and retain the UMI
+# awk is a command for text processing
+# In awk, each line in the file is a record, each word in the record is a field. Default separator is space and new line, but can be reset
+# The first set of {} are setting up some definitions of how to read the file
+# Here, I change the field separator (FS) to "1:N:0:" - this is the pattern that comes between the read name and our indices
+# Record separator (RS) = "M0", so this makes each 4 line fastq entry considered as 1 line
+# OFS is output field separator variable - because I don't want spaces (the default)
+# The second set of {} are telling it what to do 
+# print >, then the first field (the read name, everything before "1:N:0:")
+# then new line
+# Starting at the first letter, print the next 8 characters of the second field - this is our index 1
+# Starting at character 10, print 20 characters of the second field - this is our index 2 and barcode
+# Starting at character 31, print 30 characters of the second field.
+# then file name
+# then output file name
+
+awk -F "1:N:0:" 'BEGIN{FS="1:N:0:"; RS="M0";  OFS=""}  {print ">", $1, "\n", substr($2, 1,8),substr($2, 10, 20),substr($2, 31, 30)}' Undetermined_S0_L001_R1_001.fastq > i7_i5_UMI_read.fa
+
+# 2. The last command left a blank entry (2 lines) at the top, remove those. 
+
+sed '1d;2d' i7_i5_UMI_read.fa > i7_i5_UMI_read_minus.fa
+
+# 3. Split into samples with fastx_barcode_splitter - splits based on indices, can be used for many samples
+# cat outputs that file
+# | pipes it into the command
+# --bcfile specifies that the next thing is the name of the barcode file - Barcodes_9.14.21.txt
+# --prefix specifies what prefix you want on the files
+# -bol tells it to match indices at the beginning of the sequence
+
+cat i7_i5_UMI_read_minus.fa | fastx_barcode_splitter.pl --bcfile Barcodes_9.14.21.txt --prefix 091421_ --bol --mismatches 1
+
+
+# Now in the file, first 8 bp are index 1, next 8bp are index 2. Next 12 bp are UMI, then 20bp barcode.
+
+# 4. Trim off the indices 
+# The fastx_trimmer command here trims the index (first 16bp) off
+# -f specifies first base you want to keep
+# -l specifies last base you want to keep (if not specified, keeps everything)
+# -i specifies input file
+# -o specifies output file name - it'll print the specified bases in fastq format to this file
+
+fastx_trimmer -f 17 -i 091421_Plasmid -o plasmid_trimmed.fa
+
+# 5. Collapse the UMIs with fastx collapser 
+# Fastx collapesr collapses the reads down to unique reads
+
+fastx_collapser -v -i plasmid_trimmed.fa -o UMIcollapsedplasmid.fa
+
+output:
+Input: 18988892 sequences (representing 18988892 reads)
+Output: 18759863 sequences (representing 18988892 reads)
+98.8% UMIs
+
+# 6. Trim reads to barcode
+# Using fastx trimmer again, this time to trim down to just the barcode
+# Getting rid of the 12bp UMI at the beginning
+
+fastx_trimmer -f 13 -l 32 -Q33 -i UMIcollapsedplasmid.fa -o plasmid_collapsed_trimmed.fa -v
+
+# 7. Get reverse complement
+# Because the barcode is read out on the sequencer in reverse
+
+ fastx_reverse_complement -Q33 -i plasmid_collapsed_trimmed.fa -o  plasmid_collapsed_trimmed_rc.fa -v
+
+# 8. Align the reads to a reference "genome" of my barcodes using bowtie
+# I've attached another file with instructions on how to make the bowtie index file
+# -p 8 specifies that my computer has 8 processors, so it'll run in parallel (just makes it a bit faster)
+# -k 1 says only search for one alignment (bowtie can stop once it's found the barcode that matches, there shouldn't be multiple that match)
+# norc says it shouldn't try to align using the reverse complement
+# -x is the directory where bowtie2 should look for the index to align to and the name of the index (don't specify extension though, bowtie will find what it wants)
+# then I list the input file (the umi extracted reads from the last step)
+# -S is the file name to write the alignments to
+# -no-unal says the reads that didn't align shouldn't be added to the file
+bowtie2 -f -p 8 -k 1 --norc --no-sq --no-hd -x ~/Documents/MPRA/Tania/SequencingPipeline/Index/TaniaLib_bc_index plasmid_collapsed_trimmed_rc.fa -S plasmid-collapsed.sam --no-unal
+
+
+# 9. Make it into a tsv so it can be counted up
+# awk scans a file line by line, and splits it into fields, and performs an action on them.
+# Here, the separator is default white space. Each field is denoted $1, $2,... If a line has 4 words separated by spaces, it'll call them $1, $2, $3, $4
+# The first part of the phrase '$1 !~ /^@/ ' specifies which lines to act on
+# It says don't act on lines where the first words starts with @ (there's a header type thing at the beginning of the file that 
+# we don't want to include)
+# {print $1"\t"$3} says what to do to each lines - print the first word ($1), then a tab ("\t"), then the third word ($3)
+# $1 is the read identifier and UMI, $3 is the gene it aligned to
+
+awk '$1 !~ /^@/ {print $1"\t"$3}' plasmid-collapsed.sam > plasmid_reformat.tsv
+
+# 10. Count in R
+
+plasmid_count <- read_tsv("~/Documents/MPRA/Tania/SequencingPipeline/Tania_MPRAPlasmidQC/plasmid_reformat.tsv",
+                          col_names = c("collapse_count", "oligo"))
+colnames(plasmid_count) <- c("collapse_count", "oligo")
+plasmid_count_coll <- plasmid_count %>% group_by(oligo) %>%
+  summarise(count = n())
+
+
+#########################################################################
+# INSTALLING PACKAGES
+# if you don't have it already, I recommend installing conda and then bioconda to help install the other packages
+# there are a few ways to install, here are some links: 
+# https://conda.io/projects/conda/en/latest/user-guide/install/macos.html
+# https://www.anaconda.com/products/individual (I think graphical installer requires python 3.8 to be installed)
+# https://bioconda.github.io/user/install.html (run the following command and follow the directions)
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh
+sh Miniconda3-latest-MacOSX-x86_64.sh
+
+# to install bioconda, run these commands in this order (https://bioconda.github.io/user/install.html):
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+# Install fastx_toolkit
+conda install -c bioconda fastx_toolkit
+
+# Install bowtie2
+conda install bowtie2
+
+# Install umi_tools
+conda install -c bioconda umi_tools
+
+# Install sam_tools
+conda install -c bioconda samtools
+
+

@@ -1,0 +1,255 @@
+---
+title: "ChromHMMEnrichments_generalized"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggstar)
+library(here)
+library(ComplexHeatmap)
+```
+
+```{r}
+file_names = list.files(here("data/ChromHMM_Files"), full.names=T)
+```
+
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+
+snp_positions <- dplyr::select(res_merge, Causal_SNP, Chr_37, Start_37,
+                         hit_any_celltype, hit_spec)
+snp_positions <- distinct(snp_positions)
+snp_positions <- snp_positions[-duplicated(snp_positions$Causal_SNP),]
+```
+
+```{r}
+# function to check whether SNP is in a region
+check_snp <- function(snp, snp_chrom, snp_pos, anchors) {
+  anchor_snps <- dplyr::filter(anchors, (chrom == as.character(snp_chrom)) &
+                                (as.numeric(start) < as.numeric(snp_pos) & as.numeric(snp_pos) < as.numeric(end)))
+  anchor_snps <- anchor_snps %>% mutate(snp = snp, snp_pos = snp_pos)
+  return(as.data.frame(anchor_snps))}
+```
+
+```{r}
+calc_enrichment <- function(snp_positions, celltype, state){
+  # number of snps that are active and in state
+  active_state <- sum(grepl(celltype, snp_positions$hit_any_celltype) &
+                        grepl(state, snp_positions$chromhmm))
+  active_not_state <- sum(grepl(celltype, snp_positions$hit_any_celltype) &
+                        !grepl(state, snp_positions$chromhmm))
+  not_active_state <- sum(!grepl(celltype, snp_positions$hit_any_celltype) &
+                        grepl(state, snp_positions$chromhmm))
+  not_active_not_state <- sum(!grepl(celltype, snp_positions$hit_any_celltype) &
+                        !grepl(state, snp_positions$chromhmm))
+  df <- data.frame(in_state = c(active_state, not_active_state),
+                   not_state = c(active_not_state, not_active_not_state))
+  fishertest <- fisher.test(df)
+  pval = fishertest$p.value
+  est = fishertest$estimate
+  return(c(pval, est))
+}
+```
+
+
+
+```{r}
+all_fisher_res <- data.frame()
+save_chromhmm <- data.frame()
+for (file in file_names){
+  df <- read_tsv(file, col_names = c("chrom", "start", "end", "chromhmm"))
+  print(file)
+  df <- df %>% mutate(chrom = str_remove(chrom, "chr"))
+  celltype = str_remove(str_remove(file, "^.*ChromHMM_Files/"), "_.*")
+  # check whether snps are in chromhmm
+  snps_checked = data.frame()
+  for (i in 1:dim(snp_positions)[1]){
+    x = snp_positions[i,]
+    snp_checked = check_snp(x["Causal_SNP"], x["Chr_37"], x["Start_37"], df)
+    if (dim(snps_checked)[1] > 0){
+      snps_checked = base::rbind(as.matrix(snps_checked), as.matrix(snp_checked))
+      }else{
+        snps_checked = snp_checked
+      }
+  }
+  snp_df <- as.data.frame(snps_checked)
+  chrom_pos <- dplyr::select(snp_df, snp, chromhmm) %>%
+   distinct()
+
+  snp_states <- left_join(snp_positions, chrom_pos,
+                             by=c("Causal_SNP"="snp"))
+  chromhmm_df <- chrom_pos
+  colnames(chromhmm_df) <- c("Causal_SNP", celltype)
+  if(dim(save_chromhmm)[1] == 0){
+    save_chromhmm <- chromhmm_df
+  }else{
+    save_chromhmm <- left_join(save_chromhmm, chromhmm_df,
+                               by=c("Causal_SNP" = "Causal_SNP"))
+  }
+  pvals = c()
+  estimates = c()
+  for (state in unique(snp_states$chromhmm)[!is.na(unique(snp_states$chromhmm))]){
+    print(state)
+    fisher_res <- calc_enrichment(snp_states, celltype, state)
+    pvals <- c(pvals, fisher_res[1])
+    estimates <- c(estimates, fisher_res[2])
+  }
+fisher_res <- data.frame(state = unique(snp_states$chromhmm)[!is.na(unique(snp_states$chromhmm))],
+                            pval = pvals,
+                            estimate = estimates)  
+fisher_res$cell <- celltype
+all_fisher_res <- rbind(all_fisher_res, fisher_res)
+}
+
+```
+
+
+```{r}
+all_fisher_res$fdr <- p.adjust(all_fisher_res$pval, method="fdr")
+
+all_fisher_res <- all_fisher_res %>% 
+  mutate(state = factor(state, levels = c("15_Quies","14_ReprPCWk","13_ReprPC",
+                                          "9_Het","8_ZNF/Rpts",
+                                          "5_TxWk","4_Tx" ,"3_TxFlnk",
+                                          "12_EnhBiv","6_EnhG","7_Enh",  
+                                          "11_BivFlnk","10_TssBiv",
+                                          "2_TssAFlnk","1_TssA")))
+all_fisher_res <- all_fisher_res %>% mutate(chrom_state = case_when(
+  state == "15_Quies" ~ "Quiescent",
+  state == "5_TxWk" ~ "Weak transcription",
+  state == "7_Enh" ~ "Enhancer",
+  state == "9_Het" ~ "Heterochromatin",
+  state == "8_ZNF/Rpts" ~ "ZNF genes and repeats",
+  state == "1_TssA" ~ "Active TSS",
+  state == "4_Tx" ~ "Transcription",
+  state == "6_EnhG" ~ "Genic enhancer",
+  state == "14_ReprPCWk" ~ "Weak repressed polycomb",
+  state == "13_ReprPC" ~ "Repressed polycomb",
+  state == "2_TssAFlnk" ~ "Flanking active TSS",
+  state == "11_BivFlnk" ~ "Flanking bivalent TSS/enhancer",
+  state == "3_TxFlnk" ~ "Transcription at gene 5' and 3'",
+  state == "10_TssBiv" ~ "Bivalent TSS",
+  state == "12_EnhBiv" ~ "Bivalent enhancer"
+))
+all_fisher_res <- all_fisher_res %>% 
+  mutate(chrom_state = factor(chrom_state, levels = c("Quiescent","Repressed polycomb","Weak repressed polycomb",
+                                          "Heterochromatin","ZNF genes and repeats",
+                                          "Weak transcription","Transcription" ,"Transcription at gene 5' and 3'",
+                                          "Bivalent enhancer","Genic enhancer","Enhancer",  
+                                          "Flanking bivalent TSS/enhancer","Bivalent TSS",
+                                          "Flanking active TSS","Active TSS")))
+
+all_fisher_res <- all_fisher_res %>% mutate(cell_type = case_when(
+  cell == "airway" ~ "Airway",
+  cell == "colon" ~ "Colon",
+  cell == "eso" ~ "Esophagus",
+  cell == "hmec" ~ "HMEC",
+  cell == "kc" ~ "Keratinocyte",
+  cell == "mc" ~ "Melanocyte",
+  cell == "ov" ~ "Ovarian",
+  cell == "panc" ~ "Pancreatic",
+))
+
+# set colors to match cancers, but use tissue names
+cancer_colors = c(
+  #"THCA" = "yellow", 
+                  "Esophagus" = "darkgoldenrod1",
+                  "Pancreatic" = "sienna1",
+                  "Melanocyte" = "tomato1",
+                  "HMEC" = "firebrick1",
+                  "Colon" = "pink",
+  #                "UCEC" = "mediumpurple1",
+                  "Airway" = "purple4",
+ #                 "KIRC" = "cadetblue1",
+ #                 "GBM" = "deepskyblue1",
+ #                 "PRAD" = "royalblue1",
+                  "Keratinocyte" = "turquoise2",
+                  "Ovarian" = "turquoise4")
+
+```
+King's idea: Heatmap, celltypes are rows, activity category is columns, color is enrichment
+Find a non-arbitrary order for chrom types
+Original paper: https://www.nature.com/articles/nature14248
+
+```{r}
+# there are two replicates each for kc and mc chromhmm calls
+# not usiing the p-value here, so just mean the estimates
+hm_mat <- all_fisher_res %>% dplyr::select(chrom_state, estimate, cell_type) %>%
+  group_by(chrom_state, cell_type) %>%
+  summarise(estimate = mean(estimate)) %>%
+  # figure out what to do with kc,mc
+#  dplyr::filter(!cell_type %in% c("Keratinocyte", "Melanocyte")) %>%
+  pivot_wider(names_from = chrom_state, values_from = estimate) %>%
+  column_to_rownames("cell_type") 
+
+
+
+hm_mat[is.na(hm_mat)] <- 1
+
+
+# how to sort the columns?
+# this is the order in the paper
+hm_mat <- dplyr::select(hm_mat, Quiescent, 
+                        `Weak repressed\npolycomb` = 
+                          `Weak repressed polycomb`, 
+                      `Repressed polycomb` , `Bivalent enhancer`, 
+                      `Flanking bivalent\nTSS/enhancer` = 
+                        `Flanking bivalent TSS/enhancer`, `Bivalent TSS`,
+                      Heterochromatin, `ZNF genes and repeats` ,
+                      `Enhancer`, `Genic enhancer`,
+                       `Weak transcription`, Transcription, 
+                      `Transcription at\ngene 5' and 3'` = 
+                        `Transcription at gene 5' and 3'`, `Flanking active TSS`,
+                      `Active TSS`)
+
+
+# maybe sort by mean low to high?
+col_order <- sort(apply(hm_mat, 2, mean))
+hm_mat <- hm_mat[names(col_order)]
+
+hm_min <- min(hm_mat[!hm_mat == 0])
+log_hm_zeromin <- hm_mat
+log_hm_zeromin[log_hm_zeromin == 0] <- hm_min
+log_hm_zeromin <- log2(log_hm_zeromin)  
+
+# start = quantile(log_hm_zeromin,
+#                  seq(0, 1, 0.05), na.rm=T)[2]
+# end = quantile(log_hm_zeromin, 
+#                seq(0, 1, 0.05), na.rm=T)[20]
+# myBreaks = c(seq(start, end, 0.01))
+start = min(log_hm_zeromin)
+end = max(log_hm_zeromin)
+
+# try complexheatmap
+col_fun = circlize::colorRamp2(c(start, 0, end),
+                               colors = c("deepskyblue1", "white", "darkgoldenrod1"))
+
+
+p <- Heatmap(log_hm_zeromin, 
+        cluster_columns = F,
+        cluster_rows = T, show_row_dend = F,
+        heatmap_width = unit(75, 'mm'), heatmap_height = unit(38, 'mm'),
+        col = col_fun,
+        column_names_rot = 90,
+        heatmap_legend_param = list(title = "Enrichment",
+                                    title_gp = gpar(fontsize = 5,
+                                                    fontface = "bold",
+                                                    family = "Helvetica"),
+                                    labels_gp = gpar(fontsize = 5,
+                                                     family = "Helvetica"),
+                                    legend_height = unit(17, 'mm'),
+                                    grid_width = unit(2, 'mm')),
+        column_names_gp = gpar(fontsize = 5, family = "Helvetica"),
+        row_names_gp = gpar(fontsize = 6, family = "Helvetica"))
+
+draw(p)
+```
+
+```{r}
+pdf(here('images/figure_panels/chromhmm_enrichment_heatmap_zeroesmin.pdf'))
+draw(p)
+dev.off()
+```

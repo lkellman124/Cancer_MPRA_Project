@@ -1,0 +1,168 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(viridis)
+library(here)
+```
+
+Read in eQTLgen data
+Find at https://www.eqtlgen.org/cis-eqtls.html, download 'Significant cis-eQTLs
+This version is from 2019-12-11
+In hg19
+```{r}
+eqtlgen <- read_tsv(here("data/2019-12-11-cis-eQTLsFDR0.05-ProbeLevel-CohortInfoRemoved-BonferroniAdded.txt.gz"),
+                    col_types = rep("c", 15))
+```
+
+Read in the MPRA SNP table (res_merge)
+```{r}
+res_merge <- read_tsv(here("output/res_merge_gtex_hichip_proximity.tsv"))
+```
+
+Read in lead snp coordinates
+```{r}
+lead_coords <- read_tsv(here("data/lead_snp_coordinates_hg19_20230614"),
+                        col_names = c("chrom", "start", "end", "snp"))
+lead_coords <- dplyr::filter(lead_coords, !grepl("_", chrom))
+```
+
+```{r}
+eg_snps <- distinct(dplyr::select(eqtlgen, SNP, SNPChr, SNPPos, AssessedAllele, OtherAllele))
+```
+
+Inner join lead snps and eQTLgen snps
+```{r}
+eg_snps$SNPChr <- as.character(eg_snps$SNPChr)
+lead_coords <- lead_coords %>%
+  mutate(chrom = str_remove(chrom, "chr"))
+lead_pos_join <- inner_join(lead_coords, eg_snps, 
+                    by=c("chrom" = "SNPChr",
+                         "end" = "SNPPos")) %>%
+  dplyr::select(SNPChr = chrom,  SNPPos = end, snp, AssessedAllele, OtherAllele)
+lead_rsid_join <- inner_join(lead_coords, eg_snps, 
+                    by=c("snp"="SNP"))  %>%
+  dplyr::select(SNPChr, SNPPos,  snp, AssessedAllele, OtherAllele)
+lead_join <- rbind(lead_pos_join, lead_rsid_join) %>% distinct() 
+
+```
+
+
+
+Inner putative causal snps and eQTLgen snps
+```{r}
+# for putative causal snps, position join seems best
+# all rsid join hits are contained in position join
+pcsnp_coords <- dplyr::select(res_merge, locus, Causal_SNP,disease,
+                              lead_snp, Ref, Alt,
+                              Chr, Start) %>%
+  mutate(Chr = as.character(Chr))
+
+pcsnp_join <- inner_join(pcsnp_coords, eg_snps, 
+                    by=c("Chr" = "SNPChr",
+                         "Start" = "SNPPos"))
+```
+Filter the putative causal snps for matching alleles
+```{r}
+rc <- function(x) {
+  return(case_when(
+    x == "A" ~ "T",
+    x == "T" ~ "A",
+    x == "C" ~ "G",
+    x == "G" ~ "C",
+    T ~ "PROBLEM"))}
+
+pcsnp_join <- pcsnp_join %>%
+  mutate(eqtlgen_allele_match = case_when(
+    Ref == AssessedAllele & Alt == OtherAllele ~ "match",
+    Alt == AssessedAllele & Ref == OtherAllele ~ "flipped",
+    # no rev complement matches in the eQTLgen data set
+    T ~ "mismatch"
+  ))
+```
+
+```{r}
+pcsnp_join <- dplyr::filter(pcsnp_join, !eqtlgen_allele_match == "mismatch")
+
+```
+
+Put the eGenes back
+```{r}
+eqtlgen$SNPChr <- as.character(eqtlgen$SNPChr)
+pcsnp_egenes <- inner_join(dplyr::select(pcsnp_join, locus, Causal_SNP, disease,
+                                         lead_snp, Ref,
+                                         Alt, Chr, Start, eqtlgen_allele_match),
+                           eqtlgen,
+                           by = c("Chr" = "SNPChr",
+                                  "Start" = "SNPPos"))
+
+lead_egenes <- inner_join(dplyr::select(lead_join, - AssessedAllele, -OtherAllele),
+                           eqtlgen,
+                           by = c("SNPChr" = "SNPChr",
+                                  "SNPPos" = "SNPPos"))
+lead_egenes_cut <- dplyr::select(lead_egenes, lead_snp = snp, GeneSymbol)
+lead_egenes_cut$lead_egene <- "yes"
+
+pcsnp_lead_unnest <- pcsnp_egenes %>% 
+  mutate(lead_snp = str_split(lead_snp, ",|;")) %>%
+  unnest(cols= "lead_snp") %>% distinct()
+  
+pcsnp_lead_merge <- left_join(pcsnp_lead_unnest, lead_egenes_cut,
+                               by = c("lead_snp" = "lead_snp",
+                                      "GeneSymbol" = "GeneSymbol"))
+
+```
+
+
+pcsnp_lead_unnest has the causal snps, leads unnested, with genes, and indicating whether lead has same eqtl
+Next up make the egene collapsed df, egene lead shared collapsed df, merge them into res merge
+Then make the uncollapsed egene df
+
+```{r}
+check <- dplyr::filter(pcsnp_lead_merge, is.na(lead_snp))
+```
+
+
+```{r}
+pcsnp_lead_merge <- pcsnp_lead_merge %>%
+  mutate(eqtlgen_egene_lead_shared = ifelse(lead_egene == "yes", GeneSymbol, NA))
+
+pcsnp_lead_collapse <- pcsnp_lead_merge %>%
+  dplyr::select(locus, eqtlgen_egene = GeneSymbol, eqtlgen_egene_lead_shared) %>%
+  group_by(locus) %>%
+  summarise_all(function(x) paste(sort(unique(x)), collapse = ","))
+
+res_merge_add <- left_join(res_merge, pcsnp_lead_collapse)
+
+head(pcsnp_lead_merge)
+
+full_df <- pcsnp_lead_merge %>% 
+  dplyr::select( -SNP)
+```
+
+```{r}
+lead_write <- dplyr::select(lead_egenes, lead_snp = snp, chr = SNPChr,
+                            pos = SNPPos, Gene, GeneSymbol, AssessedAllele,
+                            OtherAllele, Zscore, FDR)
+                          
+  
+write_tsv(lead_write, here("output/lead_snp_eqtlgen.tsv"))
+
+```
+
+
+```{r}
+write_tsv(full_df, here("output/full_eqtlgen_egene_table.tsv"))
+
+```
+
+```{r}
+write_tsv(res_merge_add, here("output/res_merge_gtex_hichip_proximity_eqtlgen.tsv"))
+
+```
+

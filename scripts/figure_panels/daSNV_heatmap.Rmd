@@ -1,0 +1,129 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-06-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ComplexHeatmap)
+```
+
+Make a heatmap of fold-change-signed -log10(fdr) df for daSNVs
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+cancer_color_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+```
+
+
+```{r}
+dasnvs <- dplyr::filter(res_merge, !is.na(hit_spec))
+dasnvs <- dasnvs %>% mutate(hit = ifelse(grepl(",", hit_spec), "multiple", hit_spec))
+dasnvs_long <- dasnvs[c(1, grep("fdr|logFC", colnames(dasnvs)), 73)] %>%
+  pivot_longer(cols = c(-locus, -hit), names_to = "cell_quant", values_to = "quant")
+dasnvs_long <- dasnvs_long %>%
+  separate(cell_quant, into = c("celltype", "quant_type"), "_")
+dasnvs_long <- dasnvs_long %>% pivot_wider(names_from = "quant_type",
+                                           values_from = "quant")
+dasnvs_long <- dasnvs_long %>%
+  mutate(fc_dir = ifelse(logFC > 0, 1, -1)) %>%
+  mutate(signed_log_fdr = fc_dir * log10(fdr))
+
+dasnvs_mat <- dasnvs_long %>%
+  dplyr::select(locus, celltype, signed_log_fdr) %>%
+  pivot_wider(names_from = "celltype", values_from = "signed_log_fdr") %>%
+  column_to_rownames("locus")
+
+dasnvs_zeroed <- dasnvs_mat
+dasnvs_zeroed[abs(dasnvs_zeroed) < -log10(0.05)] <- 0
+```
+
+```{r}
+
+# annotate each locus with cancer type
+cancer_annot <- dasnvs_long %>%
+  dplyr::select(locus, hit) %>%
+  distinct() %>% rowwise() %>%
+  mutate(cancer = ifelse(hit == "multiple", "Multiple",
+                         cancer_color_key$cancer[cancer_color_key$celltype == hit])) %>%
+  dplyr::select(-hit) %>%
+  column_to_rownames("locus")
+
+# set the annotation colors
+ann_colors <- cancer_color_key %>%
+  dplyr::filter(!celltype == "lx") %>%
+  dplyr::select(color, cancer)
+add_mult <- data.frame(color = "grey", cancer = "Multiple")
+ann_colors <- rbind(ann_colors, add_mult)
+ann_colors_format <- ann_colors$color
+names(ann_colors_format) <- ann_colors$cancer
+ann_colors_format <- list(cancer = ann_colors_format)
+
+colnames(dasnvs_mat) <- lapply(colnames(dasnvs_mat),
+                               function(x) cancer_color_key$display_name[cancer_color_key$celltype == x])
+cancer_annot$cancer <- factor(cancer_annot$cancer,
+                              ordered = T,
+                              levels = c(sort(unique(cancer_annot$cancer[!cancer_annot$cancer ==
+                                                                           "Multiple"])),
+                                         "Multiple"))
+
+start = quantile(dasnvs_mat,
+                 seq(0, 1, 0.01), na.rm=T)[2]
+end = quantile(dasnvs_mat, 
+               seq(0, 1, 0.01), na.rm=T)[100]
+
+
+
+
+col_fun = circlize::colorRamp2(c(start, 0, end), colors = c("purple4", "white", "tomato"))
+
+
+
+# switch to complex heatmap
+annot_df <- HeatmapAnnotation(df = cancer_annot,
+                              simple_anno_size = unit(1.5, 'mm'),
+                              border = F,
+                              annotation_label = "Cancer",
+                              annotation_name_gp = gpar(fontsize = 5, family = "Helvetica",
+                                                            fontface = "bold"),
+                              col = ann_colors_format,
+                                  annotation_legend_param = list(title_gp = gpar(fontsize = 5,
+                                                                                 family = "Helvetica",
+                                                                                 fontface = "bold"),
+                                                                 labels_gp = gpar(fontsize = 4,
+                                                                                  family = "Helvetica"),
+                                                                 grid_height = unit(0.2, 'mm'),
+                                                                 grid_width = unit(2, 'mm')))
+
+p <- ComplexHeatmap::Heatmap(t(dasnvs_mat),
+                             col = col_fun,
+                             cluster_rows = T,
+                             cluster_columns = T,
+                             heatmap_width = unit(60, 'mm'),
+                             heatmap_height = unit(32, 'mm'),
+                             show_row_names = T,
+                             show_column_names = F,
+                             show_row_dend = T,
+                             row_dend_width = unit(5, "mm"),
+                             column_dend_height = unit(2, "mm"),
+                             top_annotation = annot_df,
+                             heatmap_legend_param = list(title = "Activity",
+                                                         title_gp = gpar(fontsize = 5,
+                                                                         fontface = "bold",
+                                                                         family = "Helvetica"),
+                                                         labels_gp = gpar(fontsize = 5,
+                                                                          family = "Helvetica"),
+                                                         legend_height = unit(20, 'mm'),
+                                                         grid_width = unit(2, 'mm')),
+                             row_names_gp = gpar(fontsize = 5, family = "Helvetica"))
+
+
+
+pdf(here('images/figure_panels/heatmap_allelecomp_logfdr_p0.05.pdf'))
+draw(p)
+dev.off()
+
+```

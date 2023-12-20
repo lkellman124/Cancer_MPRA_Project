@@ -1,0 +1,119 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(mashr)
+library(RColorBrewer)
+```
+
+Running MASHr on MPRAnalyze quantitative z-scores with canonical and data-driven covariance matrices
+
+# Step 1: Read in the data
+```{r}
+mpraq <- read_tsv(here("output/mpranalyze_quantitative_results.tsv"))
+zscores <- dplyr::select(mpraq, oligo_id, celltype, zscore) %>%
+  pivot_wider(names_from = "celltype", values_from = "zscore")
+# limit to snp sequences (remove controls and motifs)?
+zscores <- dplyr::filter(zscores, !grepl("control|scr|motif|positive", oligo_id))
+
+second_mat <- matrix(1, nrow = dim(zscores)[1], ncol = dim(zscores)[2]-1)
+rownames(second_mat) <- zscores$oligo_id
+
+z_mat <- column_to_rownames(zscores, "oligo_id")
+colnames(second_mat) <- colnames(z_mat)
+z_mat <- as.matrix(z_mat)
+data = mash_set_data(z_mat,second_mat)
+```
+# Step 2: Set up the covariance matrices
+# Step 3: fit the model
+```{r}
+# Step 1: select strong signals
+m.1by1 = mash_1by1(data)
+strong = get_significant_results(m.1by1,0.05)
+# Step 2: Obtain initial data-driven covariance matrices
+U.pca = cov_pca(data,5,subset=strong)
+print(names(U.pca))
+# Step 3: Apply Extreme Deconvolution
+U.ed = cov_ed(data, U.pca, subset=strong)
+# Run mash
+m.ed = mash(data, U.ed)
+print(get_loglik(m.ed),digits = 10)
+# combine data-driven and canonical covariance matrices
+U.c = cov_canonical(data)  
+m   = mash(data, c(U.c,U.ed))
+print(get_loglik(m),digits = 10)
+# marginally better
+mashr_res <- m$result
+mashr_res_long <- data.frame()
+for (i in 1:length(mashr_res)) {
+  df <- mashr_res[i]
+  df <- pivot_longer(rownames_to_column(as.data.frame(df), var = "locus"),
+                     cols = -"locus",
+                     names_to = "celltype",
+                     values_to = "values")
+  mashr_res_long <- rbind(mashr_res_long, df)
+}
+mashr_res_long <- mashr_res_long %>%
+  separate(col = celltype, into = c("value_type", "celltype"), sep = "\\." )
+mashr_res_long <- mashr_res_long %>%
+  pivot_wider(names_from = value_type, values_from = values)
+
+write_tsv(mashr_res_long, here("output/SupplementaryTables/mashr_results.tsv"))  
+```
+# Step 4: Extract Posterior Summaries
+```{r}
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+estimated_mix <- get_estimated_pi(m)
+estimated_mix_df <- data.frame(effect_type = names(estimated_mix),
+                               proportion = estimated_mix)
+estimated_mix_df <- estimated_mix_df %>%
+  dplyr::filter(!grepl("PCA", effect_type)) %>%
+  rowwise() %>%
+  mutate(effect_type = ifelse(effect_type %in% name_key$celltype,
+                              name_key$display_name[name_key$celltype == effect_type],
+                              effect_type))
+estimated_mix_df$effect_type <- factor(estimated_mix_df$effect_type,
+                                       ordered = T,
+                                       levels = estimated_mix_df$effect_type)
+est_mix <- ggplot(estimated_mix_df, aes(x = effect_type, y = proportion)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() + 
+  theme(text = element_text(,size = 8, family = "Helvetica"),
+        axis.text.x = element_text(angle = 90))
+ggsave(here("images/possible_supplementary_panels/MASHr_estimated_mix.pdf"),
+         est_mix,
+         width = 50, height = 60, units = "mm")
+
+pairwise_sharing = get_pairwise_sharing(m, factor=0.5)
+
+
+new_colnames <- sapply(colnames(pairwise_sharing),
+                       function(x) name_key$display_name[name_key$celltype == x])
+new_rownames <- sapply(rownames(pairwise_sharing),
+                       function(x) name_key$display_name[name_key$celltype == x])
+colnames(pairwise_sharing) <- new_colnames
+rownames(pairwise_sharing) <- new_rownames
+
+start = min(pairwise_sharing)
+end = max(pairwise_sharing)
+myBreaks = c(seq(start, end, 0.01))
+myColor <- colorRampPalette(brewer.pal(n = 7, name =
+                                             "Oranges"))(length(myBreaks))
+
+pheatmap::pheatmap(pairwise_sharing, scale = "none",
+         breaks = myBreaks, color = myColor,
+         treeheight_row = 20, treeheight_col = 20,
+         filename =  here("images/possible_supplementary_panels/mashr_mpraquant_pairwisesharing.pdf"),
+         width = 2.5, height = 2.25, angle_col = 90, border_color = NA,
+         fontsize = 6)
+
+```
+
+

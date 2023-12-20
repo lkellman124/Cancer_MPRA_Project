@@ -1,0 +1,89 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+Identify which SNVs are disease specific hits (ie, differentially active in the MPRA in the cell type relevant to the cancer they're associated with)
+Recode column disease_expanded so it's using the same words for each cancer/tissue type.
+Add back GWAS lib info
+```{r}
+res_merge <- read_tsv(here("output/res_merge_gtex_hichip_proximity_eqtlgen.tsv"))
+```
+
+```{r}
+# renaming some columns to match other analyses
+res_merge <- res_merge %>%
+  rename(Chr_37 = Chr,
+         Start_37 = Start,
+         gtex_egenes_all = gtex_egene_all,
+         gtex_egenes_spec = gtex_egene_spec,
+         eqtlgen_egenes = eqtlgen_egene)
+
+
+```
+Leaving out: lead_annotation_problem, haploreg_motifs, disease_subthresh, atac_tissues
+Need: leadSNP_PUBMEDID, leadSNP_OR.or.BETA, STUDY, 
+Maybe: study_type
+Check: gtex_allele_match (is this covered in alt?)
+
+
+Annotate hits for any cell type (SNVs differentially active in that cell type) and hits in the correct cell type
+```{r}
+hits <- res_merge[, grepl("fdr", colnames(res_merge))]
+hits$locus <- res_merge$locus
+hits$disease <- res_merge$disease
+hits <- pivot_longer(hits, cols= airway_fdr:thy_fdr, names_to = "cell_type", values_to="fdr")
+hits <- hits %>% mutate(cell_type = str_remove(cell_type, "_fdr") )
+hits$fdr <- as.numeric(hits$fdr)
+
+hits <- hits %>% mutate(hit_any_celltype = ifelse(fdr < 0.05, cell_type,NA))
+hits <- hits %>% rowwise() %>%
+  mutate(hit_dis_spec = ifelse(grepl(hit_any_celltype, disease), cell_type, NA))
+hits <- hits %>% group_by(locus) %>%
+  summarise(hit_any_celltype = paste(sort(unique(hit_any_celltype[!is.na(hit_any_celltype)])),
+                                     collapse=","),
+            hit_spec = paste(sort(unique(hit_dis_spec[!is.na(hit_dis_spec)])), collapse=","))
+```
+
+```{r}
+res_merge_hits <- left_join(res_merge, hits)
+```
+
+
+```{r}
+ write_tsv(res_merge_hits, here("output/res_merge_withhitannot_20230627.tsv"))
+
+```
+
+```{r}
+old_res_merge <- read_tsv("~/Documents/Old_CancerMPRA_Rproj/CancerMPRA_noGM_noH9/output/res_merge_withhitannot_20230627.tsv")
+
+test <- lapply(1:72, function(x) sum((is.na(old_res_merge[[x]]) & is.na(res_merge_hits[[x]])) |
+                                       old_res_merge[[x]] == res_merge_hits[[x]], na.rm=T))
+names(test) <- colnames(old_res_merge)
+
+check <- full_join(dplyr::select(old_res_merge, locus, disease, gtex_egenes_all, 
+                                 gtex_egenes_spec, gtex_spec_lead_shared),
+                   dplyr::select(res_merge_hits, locus, gtex_egenes_all, 
+                                 gtex_egenes_spec, gtex_spec_lead_shared),
+                   by = c("locus"))
+check2 <- dplyr::filter(check, !gtex_spec_lead_shared.x == gtex_spec_lead_shared.y)
+
+check <- full_join(dplyr::select(old_res_merge, locus, disease, airway_fdr),
+                   dplyr::select(res_merge_hits, locus, airway_fdr),
+                   by = c("locus"))
+check2 <- dplyr::filter(check, !airway_fdr.x == airway_fdr.y)
+
+sum(!res_merge_hits$hit_spec == "")
+length(unique)
+
+```
+
+
+

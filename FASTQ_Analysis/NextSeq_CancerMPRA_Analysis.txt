@@ -1,0 +1,112 @@
+# PROCESSING MPRA SEQUENCING DATA FROM FASTQ TO READ COUNTS
+# NextSeq data
+# Instructions on installing the packages with conda are at the bottom 
+
+# The sample name in this example is airway_RNA_2
+# Read 1 fastq file is airway_RNA_2_S1_R1_001.fastq.gz
+
+# 1. unzip the read1 fastq file and send it to fastx_trimmer
+# In my library, the first 20bp of read 1 are my barcode (sequence associated with each SNP) 
+# The fastx_trimmer command trims read 1 down to the first 20bp
+# '|' sends the output of gunzip (the unzipped fastq file) into the next command (fastx_trimmer)
+# -f specifies first base you want to keep
+# -l specifies last base you want to keep
+# -o specifies output file name - it'll print the specified bases in fastq format to this file
+# -Q33 tells fastx how Illumina has encoded the quality scores
+# -v is verbose - it'll print a small summary to the terminal 
+gunzip -c airway_RNA_2_S1_R1_001.fastq.gz | fastx_trimmer -f 1 -l 20 -Q33 -o airway_2-trimmed.fastq -v
+
+# 2. My barcode is sequenced on the opposite strand of the library, so I want the reverse complement
+# Command is fastx_reverse_complement
+# -i specifies input file (I put in the trimmed file from the last step)
+# -o specifies output file
+fastx_reverse_complement -Q33 -i  airway_2-trimmed.fastq -o airway_2-trimmed_rc.fastq -v
+
+# 3. Extract the UMI
+# This pipeline is from NextSeq data, which stored Index 2 (which for me includes a UMI) in read2, instead of an index read, but it should work with a MiSeq I2 file
+# umi_tools is a package for dealing with UMIs
+# extract takes out the UMI and adds it to the read identifier
+# --bc-pattern is where I specify the length of my UMI (for me, it's 12bp right at the beginning of read 2)
+# if the UMI isn't the first bases of the read, specify those other bases with an X and use N for the UMI
+# ie, if the read was my index followed by the UMI, I would say "XXXXXXXXNNNNNNNNNNNN" (8 bp index, 12bp UMI)
+# --stdin specifies the file to get the UMI from (for me, the I2 file)
+# --read2-in is where you add the file with your reads - for me, it's airway_2-trimmed_rc.fastq 
+# --stdout specifies the output file
+umi_tools extract --bc-pattern=NNNNNNNNNNNN --stdin=airway_RNA_2_S1_R2_001.fastq.gz --read2-in=airway_2-trimmed_rc.fastq --stdout=airway_2_umi_extracted.fastq --read2-stdout
+
+# 4. Align the reads to a reference "genome" of my barcodes using bowtie
+# I've attached another file with instructions on how to make the bowtie index file
+# -p 8 specifies that my computer has 8 processors, so it'll run in parallel (just makes it a bit faster)
+# -k 1 says only search for one alignment (bowtie can stop once it's found the barcode that matches, there shouldn't be multiple that match)
+# norc says it shouldn't try to align using the reverse complement
+# -x is the directory where bowtie2 should look for the index to align to and the name of the index (don't specify extension though, bowtie will find what it wants)
+# then I list the input file (the umi extracted reads from the last step)
+# -S is the file name to write the alignments to
+# -no-unal says the reads that didn't align shouldn't be added to the file
+bowtie2 -p 8 -k 1 --norc -x /Users/laurakellman/Documents/MPRA/Cancer_MPRA/Sequencing/Indexes/cmpra_renamed_index airway_2_umi_extracted.fastq -S airway_2-aligned.sam --no-unal
+
+# 5. Convert the sam file of alignments to a bam file
+# just to make it compatible with umi_tools down the line
+samtools view -S -b airway_2-aligned.sam > airway_2-aligned.bam
+
+# 6. Sort the bam file
+# The file needs to be sorted and indexed for umi_tools dedup
+samtools sort airway_2-aligned.bam -o airway_2-aligned-sorted.bam
+
+# 7. Create an index for the sorted bam file
+# umi_tools dedup needs this
+samtools index airway_2-aligned-sorted.bam
+
+# 8. Deduplicate reads
+# Takes the reads and deduplicates based on their UMI and mapping coordinate
+# -I specifies input file
+# -L is the name of the file it'll log its progress on
+# --out-sam says output a sam file
+# --no-sort-ouput tell it not to bother sorting the output
+# -S is the output file 
+umi_tools dedup -I airway_2-aligned-sorted.bam -L logfile_airway_2.txt --out-sam --no-sort-output -S airway_2_dedup.sam
+
+# 9. Make it into a tsv for count_tab
+# the count_tab function from umi_tools is going to count the number of distinct UMIs corresponding to each feature
+# The count_tab function wants a tab separated file, this command is just to get the output of the last step into that format
+# first column is readID_UMI, second column is the 'gene' it mapped to (for us, gene is something like barcode ID or snoRNA name)
+# awk scans a file line by line, and splits it into fields, and performs an action on them.
+# Here, the separator is default white space. Each field is denoted $1, $2,... If a line has 4 words separated by spaces, it'll call them $1, $2, $3, $4
+# The first part of the phrase '$1 !~ /^@/ ' specifies which lines to act on
+# It says don't act on lines where the first words starts with @ (there's a header type thing at the beginning of the file that 
+# we don't want to include)
+# {print $1"\t"$3} says what to do to each lines - print the first word ($1), then a tab ("\t"), then the third word ($3)
+# $1 is the read identifier and UMI, $3 is the gene it aligned to
+awk '$1 !~ /^@/ {print $1"\t"$3}' airway_2_dedup.sam > airway_2_dedup_reformat.tsv
+
+# 10. Count up the unique reads for each gene
+# umi_tools count_tab is going to count up the unique read/umi combinations for each gene
+# outputs a tsv file with the 'gene' in one column and the counts in another
+umi_tools count_tab -I airway_2_dedup_reformat.tsv -S airway_2_counts.tsv -L airway_2_count.log
+
+
+# INSTALLING PACKAGES
+# if you don't have it already, I recommend installing conda and then bioconda to help install the other packages
+# there are a few ways to install, here are some links: 
+# https://conda.io/projects/conda/en/latest/user-guide/install/macos.html
+# https://www.anaconda.com/products/individual (I think graphical installer requires python 3.8 to be installed)
+# https://bioconda.github.io/user/install.html (run the following command and follow the directions)
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh
+sh Miniconda3-latest-MacOSX-x86_64.sh
+
+# to install bioconda, run these commands in this order (https://bioconda.github.io/user/install.html):
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+# Install fastx_toolkit
+conda install -c bioconda fastx_toolkit
+
+# Install bowtie2
+conda install bowtie2
+
+# Install umi_tools
+conda install -c bioconda umi_tools
+
+# Install sam_tools
+conda install -c bioconda samtools

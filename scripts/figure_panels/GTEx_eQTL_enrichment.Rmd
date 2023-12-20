@@ -1,0 +1,81 @@
+---
+title: "GTEx eQTL enrichment"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(pheatmap)
+library(tidyverse)
+library(here)
+```
+
+Are daSNVs enriched for GTEx eQTLs?
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+gtex_variant_ids <- read_tsv(here("output/putative_causal_snps_gtex_variant_ids.tsv"))
+```
+Disease-specific hits enriched for specific GTEx eGenes
+```{r}
+# limit it to the non-NA diseases and to the SNPs that have a variant ID in GTEx
+# the ones that don't are a matching issue, shouldn't be counted
+res_filt <- dplyr::filter(res_merge,!is.na(disease) & Causal_SNP %in% gtex_variant_ids$Causal_SNP)
+#the multi-disease SNPs muddy the waters - just omit them for tissue specific enrichment
+res_filt <- dplyr::filter(res_filt, !grepl(",", disease))
+
+fisher_gtex <- data.frame(yes_g = c(sum(!is.na(res_filt$hit_spec) & !is.na(res_filt$gtex_egenes_spec)),
+                                    sum(is.na(res_filt$hit_spec) & !is.na(res_filt$gtex_egenes_spec))),
+                          no_g = c(sum(!is.na(res_filt$hit_spec) & is.na(res_filt$gtex_egenes_spec)),
+                                   sum(is.na(res_filt$hit_spec) & is.na(res_filt$gtex_egenes_spec))))
+fisher.test(fisher_gtex) 
+fisher_res <- fisher.test(fisher_gtex)
+
+plot_fisher <- fisher_gtex %>%
+  mutate(mpra_hit = c("Active", "Inactive")) %>%
+  pivot_longer(cols = c(yes_g, no_g),
+               names_to = "gtex_egene_spec",
+               values_to = "snps") %>%
+  mutate(gtex_egene_spec = ifelse(gtex_egene_spec == "yes_g", T, F))
+colnames(plot_fisher) <- c("MPRA activity", "gtex_eqtl", "SNPs")
+plot_fisher$`MPRA activity` <- factor(plot_fisher$`MPRA activity`, 
+                                      levels = c("Inactive", "Active"),
+                                      ordered = T)
+```
+
+
+```{r}
+stat.test <- data.frame(
+  group1 = "Inactive",
+  group2 = "Active",
+  p = fisher_res$p.value,
+  y.position = 0.42,
+  xmin = 1,
+  xmax = 2,
+  gtex_eqtl = T)
+  
+stat.test <- stat.test %>%
+  add_significance()
+
+gp <- ggplot(plot_fisher, aes(x = `MPRA activity`, y = SNPs, fill = gtex_eqtl))  +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("Proportion of SNPs") +
+  labs(fill = "Tissue-specific\neQTL") +
+  theme_minimal() + scale_fill_manual(values = c("NA", "black")) +
+  theme(axis.title = element_text(size = 5, family = "Helvetica"),
+    axis.text.x = element_text(size = 5, angle = 45, family = "Helvetica"),
+    legend.text = element_text(size =5, family = "Helvetica"),
+    legend.title = element_text(size =5, family = "Helvetica"),
+    axis.text.y = element_text(size = 5, family = "Helvetica"),
+    legend.key.size = unit(0.2, 'cm'),
+    line=element_line(linewidth=0.2))  +
+  coord_cartesian(ylim=c(0, 0.45))
+
+gp + stat_pvalue_manual(stat.test, label = "p.signif", tip.length = 0,
+                        vjust = 0.6)
+
+ggsave(here("images/figure_panels/GTEx_eQTL_enrichment_yaxischanged.pdf"),
+            width = 39, height = 43, units = 'mm')
+
+```
+

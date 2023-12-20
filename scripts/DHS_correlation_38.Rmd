@@ -1,0 +1,289 @@
+---
+title: "DHS correlation with MPRA activity"
+output: html_document
+date: "2023-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(RColorBrewer)
+```
+
+Get correlations between DHS signal and MPRA activity in that cell type
+Downloaded all relevant DNAse data sets from ENCODE - narrowpeak bed files in relevant cell types, GRCh38 (because uterus is now available there)
+xargs -L 1 curl -O -J -L < files.txt
+Check correlation with activity of all, correlation with significant fragments, with daSNVs
+
+Read in DNAse file metadata
+```{r}
+metadata <- read_tsv(here("data/DHS_data/metadata.tsv"))
+```
+Read in MPRA results
+```{r}
+mpraq <- read_tsv(here("output/mpranalyze_quantitative_results.tsv"))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+# add disease annotations to mpraq
+mpraq <- left_join(mpraq, distinct(dplyr::select(res_merge, locus, disease)))
+```
+
+```{r}
+write(unique(res_merge$Causal_SNP), here("output/putative_causal_snp_rsids.txt"))
+# write out the rsIDs so I can get GRCh38 coordinates
+# uploaded to UCSC Genome table browser
+# assembly: Dec. 2013 (GRCh38/hg38)
+# group: Variation, track: dbSNP 155
+# table: Common dbSNP(155) (dbSnp155Common)
+# output format: BED
+# moved file to data folder
+snp_bed_file = here("data/putative_causal_snp_coords_GRCh38.bed")
+```
+
+
+Make a data frame that has all the file locations (full paths), data set name, converted celltype
+```{r}
+dnase_files <- list.files(here("data/DHS_data"), full.names=T)
+dnase_df <- data.frame(filenames = dnase_files,
+                       sample_name = str_remove(str_remove(dnase_files, ".bed$"), "^.*/"))
+dnase_df <- inner_join(dnase_df, metadata,
+                       by = c("sample_name" = "File accession"))                      
+dnase_df <- dnase_df %>% 
+  mutate(celltype = case_when(
+    grepl("melanocyte", `Biosample term name`) ~ "mc",
+    grepl("kidney|proximal tubule|renal", `Biosample term name`) ~ "renal",
+    grepl("astrocyte", `Biosample term name`) ~ "ast",
+    grepl("esophagus", `Biosample term name`) ~ "eso",
+    grepl("keratinocyte", `Biosample term name`) ~ "kc",
+    grepl("lung|bronchial", `Biosample term name`) ~ "airway",
+    grepl("ovary", `Biosample term name`) ~ "ov",
+    grepl("mammary", `Biosample term name`) ~ "hmec",
+    grepl("prostate", `Biosample term name`) ~ "pros",
+    grepl("colon", `Biosample term name`) ~ "colon",
+    grepl("pancreas", `Biosample term name`) ~ "panc",
+    grepl("thyroid", `Biosample term name`) ~ "thy",
+    grepl("uterus", `Biosample term name`) ~ "endo"))
+# missing endo and thyroid
+dnase_df <- dplyr::filter(dnase_df, !is.na(celltype))
+```
+
+
+Intersect snp_bed with the roadmap data sets
+```{r}
+# system() is fighting with here(), won't find bedtools
+# make it output commands, paste into terminal for now
+
+cells <- unique(dnase_df$celltype)
+intersect_files <- data.frame()
+for (cell in cells){
+  cat(cell)
+  file_subset = dnase_df[dnase_df$celltype == cell,]
+  file_paste = paste(file_subset$filenames, collapse = " ")
+  cat_file =  paste0(here("output/DHS_correlation/cat_sort/"),
+                     cell, ".bed")
+  command_cat = paste("cat", file_paste, ">",cat_file, collapse = " ")
+  system(command_cat, intern = FALSE,
+          ignore.stdout = FALSE, ignore.stderr = FALSE,
+          wait = TRUE, input = NULL, show.output.on.console = TRUE,
+          minimized = FALSE, invisible = TRUE, timeout = 0)
+  # now we need to sort
+  sort_file = paste0(str_remove(cat_file, ".bed"), "_sort.bed")
+  command_sort = paste("sort -k1,1 -k2,2n", cat_file, ">", sort_file)
+  system(command_sort, intern = FALSE,
+          ignore.stdout = FALSE, ignore.stderr = FALSE,
+          wait = TRUE, input = NULL, show.output.on.console = TRUE,
+          minimized = FALSE, invisible = TRUE, timeout = 0)
+  #  
+  # now merge peaks
+  merge_file = paste0(here("output/DHS_correlation/merge_files/"),
+                      str_remove(str_remove(sort_file, "_sort.bed"), ".*/"), "_merge.bed")
+                   
+  command_merge = paste("/opt/miniconda3/bin/bedtools merge -i", sort_file, "-c 7 -o mean >",
+                        merge_file)
+  system(command_merge, intern = FALSE,
+          ignore.stdout = FALSE, ignore.stderr = FALSE,
+          wait = TRUE, input = NULL, show.output.on.console = TRUE,
+          minimized = FALSE, invisible = TRUE, timeout = 0)
+  intersect_file = here(paste0("output/DHS_correlation/snp_intersect/",
+                               cell, "_intersect.bed"))
+  command_intersect = paste("/opt/miniconda3/bin/bedtools intersect", "-a", snp_bed_file,
+                            "-b", merge_file, "-wa -wb >", intersect_file)
+  
+  system(command_intersect, intern = FALSE,
+          ignore.stdout = FALSE, ignore.stderr = FALSE,
+          wait = TRUE, input = NULL, show.output.on.console = TRUE,
+          minimized = FALSE, invisible = TRUE, timeout = 0)
+
+  intersect_files <- bind_rows(intersect_files, 
+                               data.frame(celltype = cell,  
+                                          filename = intersect_file))
+}
+```
+
+```{r}
+# store correlations
+correlations <- data.frame()
+# store p-values
+correlations_sig <- data.frame()
+
+for (i in 1:dim(intersect_files)[1]){
+  cell = intersect_files$celltype[i]
+  filename = intersect_files$filename[i]
+  intersect <- read_tsv(filename, 
+                      col_names = c("chrom", "start_snp", "end_snp", "snp",
+                                    "chrom_dhs", "start_dhs", "end_dhs",
+                                    "signal"))
+  intersect <- intersect %>% dplyr::select(snp, signal) %>% distinct()
+  dasnvs <- res_merge$locus[grepl(cell, res_merge$hit_spec)]
+  # looking at correlations with allelic differential activity
+  # there is none - this isn't surprising to me 
+  res_intersect <- left_join(dplyr::select(res_merge, locus, Causal_SNP,
+                                           disease, hit_spec,
+                                           starts_with(cell)),
+                                intersect,
+                                by = c("Causal_SNP" = "snp"))
+  colnames(res_intersect) <- c("locus", "Causal_SNP", "disease", "hit_spec",
+                               "fdr", "pval", "logFC", "signal")
+  res_intersect <- res_intersect %>%
+    mutate(signal = ifelse(is.na(signal), 0, signal))
+  corr_diff_sig = cor.test(res_intersect$logFC[res_intersect$fdr < 0.05], 
+                res_intersect$signal[res_intersect$fdr < 0.05])
+  
+  # Looking at correlations with activity
+  # these are more correlated (depending on comparison)
+  cell_mpraq <- mpraq %>%
+     dplyr::filter(celltype == cell  & !is.na(Causal_SNP) &
+                     !is.na(statistic)) %>%
+  dplyr::select(locus, oligo_id, Causal_SNP, disease, statistic, zscore, fdr) 
+  mpraq_int <- left_join(cell_mpraq, intersect,
+                       by = c("Causal_SNP" = "snp"))
+  mpraq_int <- mpraq_int %>%
+    mutate(signal = ifelse(is.na(signal), 0, signal))
+  # correlate activity (alpha statistic)
+  corr_act <- cor.test(mpraq_int$signal, mpraq_int$statistic)
+  # correlate activity for only significantly active sequences
+  corr_act_sig <- cor.test(mpraq_int$signal[mpraq_int$fdr < 0.05], 
+      mpraq_int$statistic[mpraq_int$fdr < 0.05])
+  # correlate with MPRA -log10(FDR)
+  corr_act_logfdr <- cor.test(mpraq_int$signal, -log10(mpraq_int$fdr + .0001))
+  # correlate only with SNVs in relevant disease
+  corr_act_reldis <- cor.test(mpraq_int$signal[grepl(cell, mpraq_int$disease)], 
+          mpraq_int$statistic[grepl(cell, mpraq_int$disease)])
+  # correlate activity only with significantly active SNVs in relevant disease
+  cor_act_reldis_sig <- cor.test(mpraq_int$signal[grepl(cell, mpraq_int$disease) & mpraq_int$fdr < 0.05], 
+          mpraq_int$statistic[grepl(cell, mpraq_int$disease) & mpraq_int$fdr < 0.05])
+  # correlate activity only for daSNVs
+  cor_act_dasnvs <- cor.test(mpraq_int$signal[mpraq_int$locus %in% dasnvs], 
+          mpraq_int$statistic[mpraq_int$locus %in% dasnvs])
+  # correlate activity for significantly active snvs, only for those not associated
+  # with the relevant disease
+  cor_act_nonreldis <- cor.test(mpraq_int$signal[!grepl(cell, mpraq_int$disease) & mpraq_int$fdr < 0.05], 
+          mpraq_int$statistic[!grepl(cell, mpraq_int$disease) & mpraq_int$fdr < 0.05])
+  df <- data.frame(celltype = cell,
+                   corr_diff_sig = corr_diff_sig$estimate,
+                   corr_act = corr_act$estimate,
+                   corr_act_sig = corr_act_sig$estimate,
+                   corr_act_logfdr = corr_act_logfdr$estimate,
+                   corr_act_reldis = corr_act_reldis$estimate,
+                   cor_act_reldis_sig = cor_act_reldis_sig$estimate,
+                   cor_act_dasnvs = cor_act_dasnvs$estimate,
+                   cor_act_nonreldis = cor_act_nonreldis$estimate)
+  df_sig <- data.frame(celltype = cell,
+                   corr_diff_sig = corr_diff_sig$p.value,
+                   corr_act = corr_act$p.value,
+                   corr_act_sig = corr_act_sig$p.value,
+                   corr_act_logfdr = corr_act_logfdr$p.value,
+                   corr_act_reldis = corr_act_reldis$p.value,
+                   cor_act_reldis_sig = cor_act_reldis_sig$p.value,
+                   cor_act_dasnvs = cor_act_dasnvs$p.value,
+                   cor_act_nonreldis = cor_act_nonreldis$p.value)
+  correlations <- bind_rows(correlations, df)
+  correlations_sig <- bind_rows(correlations_sig, df_sig)
+
+}
+
+mean(correlations$corr_act)
+mean(correlations$corr_act_sig)
+```
+
+Make a heatmap
+```{r}
+correlations_hm <- data.frame()
+correlations_hm_p <- data.frame()
+mpra_cells = unique(mpraq$celltype)
+for (i in 1:length(mpra_cells)){
+  mpra_cell = mpra_cells[i]
+  dhs_cors = c()
+  dhs_cors_p = c()
+  dhs_rownames = c()
+  for (j in 1:dim(intersect_files)[1]){
+    dhs_cell = intersect_files$celltype[j]
+    filename = intersect_files$filename[j]
+    intersect <- read_tsv(filename, 
+                          col_names = c("chrom", "start_snp", "end_snp", "snp",
+                                    "chrom_dhs", "start_dhs", "end_dhs",
+                                    "signal"))
+    intersect <- intersect %>% dplyr::select(snp, signal) %>% distinct()
+    cell_mpraq <- mpraq %>%
+      dplyr::filter(celltype == mpra_cell  & !is.na(Causal_SNP) &
+                     !is.na(statistic)) %>%
+      dplyr::select(locus, oligo_id, Causal_SNP, disease, statistic, zscore, fdr)
+    mpraq_int <- left_join(cell_mpraq, intersect,
+                       by = c("Causal_SNP" = "snp"))
+    mpraq_int <- mpraq_int %>%
+      mutate(signal = ifelse(is.na(signal), 0, signal))
+    corr_act_sig <- cor.test(mpraq_int$signal[mpraq_int$fdr < 0.05], 
+      mpraq_int$statistic[mpraq_int$fdr < 0.05])
+    dhs_cors <- c(dhs_cors, corr_act_sig$estimate)
+    dhs_cors_p <- c(dhs_cors_p, corr_act_sig$p.value)
+    dhs_rownames <- c(dhs_rownames, dhs_cell)
+  }
+  df <- data.frame(cellname = dhs_cors)
+  colnames(df) <- mpra_cell
+  df_p <- data.frame(cellname = dhs_cors_p)
+  colnames(df_p) <- mpra_cell
+  rownames(df) <- dhs_rownames
+  rownames(df_p) <- dhs_rownames
+  if (dim(correlations_hm)[1] == 0){
+    correlations_hm <- df
+    correlations_hm_p <- df_p
+  }else{
+  correlations_hm <- cbind(correlations_hm, df)
+  correlations_hm_p <- cbind(correlations_hm_p, df_p)
+  }
+  
+}
+
+
+correlations_hm <- correlations_hm[sort(rownames(correlations_hm)),]
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+new_colnames <- sapply(colnames(correlations_hm),
+                       function(x) name_key$display_name[name_key$celltype == x])
+new_rownames <- sapply(rownames(correlations_hm),
+                       function(x) name_key$display_name[name_key$celltype == x])
+
+colnames(correlations_hm) <- new_colnames
+rownames(correlations_hm) <- new_rownames
+
+start = min(correlations_hm)
+end = max(correlations_hm)
+myBreaks = c(seq(start, end, 0.01))
+myColor <- colorRampPalette(brewer.pal(n = 7, name =
+                                             "Purples"))(length(myBreaks))
+
+pheatmap::pheatmap(correlations_hm, scale = "none",
+         breaks = myBreaks, color = myColor,
+         treeheight_row = 20, treeheight_col = 20,
+         cluster_rows = F, cluster_cols = F,
+         border_color = NA,
+         filename =  here("images/possible_supplementary_panels/dhs_correlation.pdf"),
+         width = 2.5, height = 2.25, angle_col = 90,
+         fontsize = 8)
+
+
+
+```
+
+

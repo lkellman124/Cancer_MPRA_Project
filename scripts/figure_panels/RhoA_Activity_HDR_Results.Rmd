@@ -1,0 +1,89 @@
+---
+title: "Plot RhoA Assay Results"
+output: html_document
+date: "2023-07-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+Plot results from Ron's RhoA assay on the rs10411210 HDR edited cells
+```{r}
+rhoa <- read_tsv(here("data/RhoA_Stim_rs1HDR_Assay.txt"),
+                 skip = 1)
+```
+
+```{r}
+rhoa$Allele <- factor(rhoa$Allele, levels = c("T", "C"), 
+                      ordered = T)
+rhoa$Stimulation <- factor(rhoa$Stimulation, levels = c("Vehicle", "Stim"), 
+                      ordered = T)
+rhoa$Condition <- factor(rhoa$Condition,
+                         levels = c("T - Vehicle",
+                                    "T - Stim",
+                                    "C - Vehicle",
+                                    "C - Stim"),
+                         ordered = T)
+
+comparisons <- list(c("T - Vehicle", "C - Vehicle"),
+                    c("T - Stim", "C - Stim"))
+
+rhoa <- rhoa %>% group_by(Condition, Allele, Stimulation) %>%
+  mutate(N = length(Replicate),
+            mean_activity = mean(Activity),
+            sd_activity = sd(Activity)) %>%
+  mutate(error_bar_min = mean_activity - sd_activity,
+         error_bar_max = mean_activity + sd_activity)
+
+rp <- ggplot(data = rhoa, aes( x= Condition, y = Activity, fill = Stimulation)) +
+  geom_bar(stat = "summary", fun = "mean") +
+  geom_point(data = rhoa, aes(x = Condition, y = Activity),
+             size = 0.4, fill = NA) +
+  scale_fill_manual(values = c("grey70", "gray35")) +
+  stat_compare_means(method = "t.test", comparisons = comparisons,
+                     tip.length = 0, size = 2) +
+  ylim(0, 70) +
+  theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        axis.text.x = element_text(family = "Helvetica", size = 6),
+        axis.text.y = element_text(family = "Helvetica", size = 6),
+        line=element_line(linewidth=0.2),
+        legend.text = element_text(size =5),
+        legend.title = element_text(size =5),
+        legend.key.size = unit(0.2, 'cm')) +
+  geom_errorbar(aes(x = Condition, ymin = error_bar_min, ymax = error_bar_max),
+                width = 0.2, linewidth = 0.1)
+  rp
+```
+Reformat to match CRISPRi
+```{r}
+rhoa$Condition <- factor(rhoa$Condition,
+                         levels = c("C - Vehicle",
+                                    "T - Vehicle",
+                                    "C - Stim",
+                                    "T - Stim"),
+                         ordered = T)
+
+
+rp_reformat <- ggbarplot(rhoa,
+                   x = "Condition", y = "Activity", fill = "Allele",
+                   add = "mean_se", size = 0.2) + 
+    geom_point(size = 0.2) +
+    scale_fill_manual(values = c("grey95", "gray65")) +
+    stat_compare_means(comparisons = comparisons, method = "t.test",  
+                     vjust = 0, label.y = c(50, 60)) + # , label.y = label_y
+    theme_minimal() +
+    theme(text = element_text(size = 6, family = "Helvetica"),
+          axis.text.x = element_text(angle = 45, vjust = 0.8),
+          plot.title = element_text(size = 8),
+          legend.text = element_text(size =5),
+        legend.title = element_text(size =5),
+        legend.key.size = unit(0.2, 'cm')) +
+  ylim(0, 65)
+rp_reformat$layers[[4]]$aes_params$textsize <- 2
+ggsave(here(paste0("images/figure_panels/rhoa_activity_assay_rs1HDR.pdf")),
+       rp_reformat, width = 50, height = 45, units = 'mm')
+
+```

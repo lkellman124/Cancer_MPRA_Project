@@ -1,0 +1,187 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(ggpubr)
+library(rstatix)
+```
+  
+Looking for enrichment of SNVs with differential activity for variants with allele-specific HiChIP signal
+Only slightly reformatted my asATAC code, so says 'ATAC' a lot, but is using the H3K27ac HiChIP data
+Read in Margaret's file with all snps, read in MPRA results table
+```{r}
+asatac_all <-  read_csv(here("data/vcf_df_all_hichip.csv"),
+                        col_types = paste(rep("c", 47), collapse=""))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+
+asatac_all <- dplyr::filter(asatac_all, POS %in% res_merge$Start_37 )
+# remove tissues I don't use
+asatac_all <- dplyr::filter(asatac_all, !tissue %in% c("Bladder", "GDSD3", "GDSD6", "GM12878")) %>%
+  dplyr::select(-Blad_B1, -Blad_B2, -GDSD3_B1, -GDSD3_B2, -GDSD6_B1, -GDSD6_B2, -GM12878_B1, -GM12878_B2,)
+```
+
+```{r}
+res_cut <- dplyr::select(res_merge, Causal_SNP, Chr_37, Start_37, disease,
+                         hit_spec) %>% distinct()
+asatac_all <- asatac_all %>% dplyr::select(-`...1`)
+asatac_all <- asatac_all %>% mutate(Chr_37 = as.numeric(str_remove(CHROM, "chr")))
+# measured in different tissues, so this won't be a 1-1 matching
+asatac_all$POS <- as.numeric(asatac_all$POS)
+asatac_join <- inner_join(res_cut, asatac_all, by = c("Chr_37"="Chr_37", "Start_37" = "POS"))
+```
+
+
+Split sample column into separate info by ":"
+Filter by DP >=10, one of AD >= 2, 
+GT = 0/1 for all already, so not filtering that
+FILTER only PASS or VSQR 99
+Sum over replicates
+```{r}
+depth_filter = 10
+allele_count = 2
+
+aa_all <- pivot_longer(asatac_join, cols = c("Air_B1", "Air_B3", "Astro_B1", "Astro_B2", "Colon_B1", "Colon_B2",
+                                             "Eso_B1", "Eso_B2", "GDSD0_B1", "GDSD0_B2",  "HMEC0_B1",
+                                             "HMEC4_B2", "MC_B1", "MC_B2", "Ova_B1", "Ova_B2", "Panc_B2", "Panc_B3",
+                                             "Pros_B1", "Pros_B2", "Renal_B1", "Renal_B2", "Thy_B1", "Thy_B2", 
+                                             "Uter_B2", "Uter_B3"),
+                          names_to = "sample_name",
+                          values_to = "sample")
+# keep only those with data
+aa_all <- dplyr::filter(aa_all, !is.na(sample))
+# keep only relevant samples
+aa_all <- dplyr::select(aa_all, Causal_SNP, Chr_37, Start_37, disease, hit_spec,
+                        REF, ALT, FILTER, tissue, sample_name, FORMAT, sample)
+# separate samples into the different fields
+aa_all <- aa_all %>% separate( col = "sample", into = c("GT", "AD", "DP", "GQ","PL"), sep = ":", remove=F)
+# separate AD into the different counts
+aa_all <- aa_all %>% separate(col="AD", into=c("AD1", "AD2"), sep=",", remove=F)
+# Filter for DP >=10, allele counts >=2
+aa_all$DP <- as.numeric(aa_all$DP)
+aa_all$AD1 <- as.numeric(aa_all$AD1)
+aa_all$AD2 <- as.numeric(aa_all$AD2)
+# sum over replicates
+aa_all <- aa_all %>% group_by(Causal_SNP, Chr_37, Start_37, disease, hit_spec,
+                              REF, ALT, tissue, FILTER) %>%
+  summarise(AD1 = sum(AD1), AD2 = sum(AD2), DP = sum(DP))
+
+aa_all_filt <- dplyr::filter(aa_all, DP >= depth_filter)
+aa_all_filt <- dplyr::filter(aa_all_filt, AD1 > allele_count | AD2 > allele_count)
+aa_all_filt <- dplyr::filter(aa_all_filt, !(FILTER == "."))
+```
+
+Run binomial test on AD1 and AD2
+binom.test(x, p = 0.5, alternative = “two.sided”, conf.level = 0.95)
+FDR correct
+```{r}
+aa_all_filt <- aa_all_filt %>% rowwise() %>%
+  mutate(as_pval = binom.test(c(AD1, AD2), p=0.5, alternative = "two.sided", conf.level=0.95)$p.value,
+         estimate = binom.test(c(AD1, AD2), p=0.5, alternative = "two.sided", conf.level=0.95)$estimate,
+         allele_ratio = min(AD1/AD2, AD2/AD1))
+
+aa_all_filt <- aa_all_filt %>% ungroup() %>%
+  mutate(p_adj = p.adjust(as_pval, method="bonferroni" ))
+                               
+```
+Merge with library
+Filter for only the ones that met the quality filters and where a pvalue for allelic skew could be assessed
+```{r}
+# cut out excess columns
+asatac_cut <- dplyr::select(aa_all_filt, Causal_SNP, disease, hit_spec, 
+                            Chr_37, Start_37, tissue, p_adj, allele_ratio, estimate)
+# filter for only those with a p value (the ones that met quality filters and could be assessed)
+asatac_cut <- asatac_cut %>% mutate(tissue_convert = case_when(
+  grepl("Breast|HMEC|BREAST|MAMM", tissue) ~ "hmec",
+  grepl("Eso|ESO", tissue) ~ "eso",
+  grepl("GDS", tissue) ~ "kc",
+  grepl("Renal", tissue) ~ "renal",
+  grepl("Airway", tissue) ~ "airway",
+  grepl("Ovar|OV", tissue) ~ "ov",
+  grepl("Panc|PANC", tissue) ~ "panc",
+  grepl("Melanocyte", tissue) ~ "mc",
+  grepl("Brain|Ast", tissue) ~ "ast",
+  grepl("Colon|COLON", tissue) ~ "colon",
+  grepl("Thyroid", tissue) ~ "thy",
+  grepl("Uter", tissue) ~ "endo",
+  grepl("Pros", tissue) ~ "pros"))
+
+# unnest hit and disease
+asatac_tiss <- asatac_cut %>% mutate(disease = str_split(disease, ",")) %>%
+  unnest(disease) %>%
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec)
+
+# now this includes snps with multiple diseases where the asatac is in the non-hit disease
+# filter those out
+# did the filtering a little wrong last time 
+# don't want to remove entries where !grepl(disease, hit_spec)
+# want to change hit_spec to NA in that case so it counts against the tissue specific count
+# ie, dis = colon,endo, hit_spec = endo, asatac=colon should become:
+# dis = colon,endo, hit_spec = NA, asatac=colon
+asatac_tiss <- asatac_tiss %>% rowwise() %>% dplyr::filter(disease == tissue_convert)
+asatac_tiss <- asatac_tiss %>% rowwise() %>%
+  mutate(hit_spec = case_when(
+    is.na(hit_spec) ~ hit_spec,
+    disease == hit_spec ~ hit_spec,
+    T ~ NA))
+  
+```
+Check for enrichment
+Using the same cutoffs for calling asHiChIP as I did for calling asATAC (p_adj < 0.01, low allele has fewer than half the counts of the high allele)
+
+Enrichment is not significant 
+```{r}
+p_cut = 0.01
+allele_ratio_cut = 0.5
+
+asatac_tiss <- asatac_tiss %>%
+  mutate(asatac_hit = ifelse(p_adj < p_cut & allele_ratio <= allele_ratio_cut, T, F))
+
+
+fisher_df <- data.frame(in_asatac = c(sum(asatac_tiss$asatac_hit & !is.na(asatac_tiss$hit_spec)),
+                                      sum(asatac_tiss$asatac_hit & is.na(asatac_tiss$hit_spec))),
+                        not_asatac = c(sum(!asatac_tiss$asatac_hit & !is.na(asatac_tiss$hit_spec)),
+                                       sum(!asatac_tiss$asatac_hit & is.na(asatac_tiss$hit_spec))))
+fisher.test(fisher_df)
+
+
+```
+
+Try the non-tissue filtered variants
+```{r}
+p_cut = 0.01
+allele_ratio_cut = 0.5
+as_lib_filt_all <- dplyr::filter(asatac_cut, !is.na(p_adj))
+
+as_lib_filt_grp <- as_lib_filt_all %>% group_by(Causal_SNP) %>%
+  summarise(mpra_hit = ifelse(sum(is.na(hit_spec)) < length(hit_spec), T, F),
+            asatac_hit = ifelse(sum(p_adj < p_cut & allele_ratio <= allele_ratio_cut) > 0, T, F))
+fisher_df_all <- data.frame(in_asatac = c(sum(as_lib_filt_grp$asatac_hit & as_lib_filt_grp$mpra_hit),
+                                          sum(as_lib_filt_grp$asatac_hit & !as_lib_filt_grp$mpra_hit)),
+                            not_asatac = c(sum(!as_lib_filt_grp$asatac_hit & as_lib_filt_grp$mpra_hit),
+                                           sum(!as_lib_filt_grp$asatac_hit & !as_lib_filt_grp$mpra_hit)))
+fisher.test(fisher_df_all)
+
+```
+Check how many SNPs
+```{r}
+# total SNPs assessed
+length(unique(aa_all_filt$Causal_SNP))
+# 754
+match_dis <- aa_all_filt
+# asHiChIP SNPs
+sig <- dplyr::filter(aa_all_filt, !is.na(p_adj) & p_adj < p_cut & allele_ratio <= allele_ratio_cut )
+length(unique(sig$Causal_SNP))
+# 62
+length(unique(asatac_tiss$Causal_SNP))
+# 186
+sum(asatac_tiss$asatac_hit)
+```
+
+Only 186 SNPs were able to be assessed for allele-specific activity in the tissue corresponding to their cancer type, of which only 7 showed were detected as asHiChIP.

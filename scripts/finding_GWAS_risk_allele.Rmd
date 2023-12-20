@@ -1,0 +1,113 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+#### For risk alleles:
+* For lead SNPs, determine whether risk allele is ref, alt or unknown based on GWAS entries
+* For each causal allele, determine which allele is risk 
+
+### PLAN:
+Get the haploreg data for lead and causal snps like in HaploReg_FindingSNPs
+Use that to determine whether the allele marked as strongest in the GWAS catalog is ref or alt
+
+
+```{r}
+lib <- read_tsv(here("output/cancer_lib_haploreg_diseasereannotated.tsv"))
+gwas_cat <- read_tsv(here("data/gwas_catalog_v1.0-associations_e109_r2023-06-03.tsv"))
+```
+
+If strongest SNP risk allele is ? then unknown
+```{r}
+sum(grepl("\\?", gwas_cat$`STRONGEST SNP-RISK ALLELE`))
+causal_snps <- unique(unlist(str_split(lib$Causal_SNP, ",")))
+lead_snps <- unique(unlist(str_split(lib$leadSNP, ",")))
+
+lib_snps <- unique(c(causal_snps, lead_snps))
+gwas_lib_cat <- dplyr::filter(gwas_cat, SNPS %in% lib_snps)
+                              
+# checking to see if everything worked out                             
+sum(lead_snps %in% gwas_lib_cat$SNPS)
+sum(causal_snps %in% gwas_lib_cat$SNPS)
+
+gwas_filt <- gwas_cat
+
+# all of the missing lead snps are also missing the useful allele information
+# will just label them unknown
+
+
+# sort by disease so we don't get the allele linked to height or something
+gwas_lib_filt <- gwas_lib_cat %>% dplyr::filter(grepl("ancer|arcinoma|ymphoma|lioma|eukemia|elanoma|lioblastoma|adenoma", `DISEASE/TRAIT`) | grepl("ancer", STUDY))
+```
+Getting the allele out of strongest risk allele
+```{r}
+gwas_lib_filt <- gwas_lib_filt %>% mutate(gwas_allele = str_remove(`STRONGEST SNP-RISK ALLELE`,
+                                                                 "^.*-"))
+
+```
+
+### Relating allele and risk
+Column 'OR or BETA' can be an OR or a beta. An OR should be greater than 1, and the alleles should already have been flipped to correspond. A beta can be greater or less than 1 (centered on 0), and the CI column should say increasing or decreasing
+Decreasing will not be negative
+
+```{r}
+gwas_lib_filt <- gwas_lib_filt %>% 
+  mutate(risk_allele = case_when(
+    gwas_allele == "?" ~ "unknown",
+    is.na(`OR or BETA`) ~ "unknown",
+    grepl("increas", `95% CI (TEXT)`) ~ gwas_allele,
+    grepl("decreas", `95% CI (TEXT)`) ~ paste("flip", gwas_allele, sep="_"),
+    `OR or BETA` <  1 ~ "unknown",
+    `OR or BETA` > 1 ~ gwas_allele,
+    T ~ "unknown"            
+  ))
+
+duplicates <- gwas_lib_filt[gwas_lib_filt$SNPS %in% gwas_lib_filt$SNPS[duplicated(gwas_lib_filt$SNPS)],]
+gwas_lib_coll <- gwas_lib_filt %>% group_by(SNPS) %>% 
+  summarise(gwas_risk_allele = paste(risk_allele, collapse=","))
+lead_gwas <- dplyr::select(gwas_lib_filt, SNPS, risk_allele)
+           
+```
+
+
+
+Now I have the probable-ish risk alleles for the lead snps (GWAS catalog is sometimes wrong). Want to line them up with whether they're the reference or alternate allele for that snp (haploreg) and then add the ref/alt info into the lib table
+
+```{r}
+haplo <- read_tsv(here("data/cmpra_haploreg_data_withquery.tsv"))
+rc_check <- function(x) {
+  return(case_when(
+    x == "A" ~ "T",
+    x == "T" ~ "A",
+    x == "C" ~ "G",
+    x == "G" ~ "C"
+  ))
+}
+
+haplo_gwas <- right_join(haplo, lead_gwas, by=c("rsID"="SNPS"))
+haplo_gwas <- haplo_gwas %>% mutate(risk_allele_ref_alt = case_when(
+  risk_allele == "unknown" ~ "unknown",
+  risk_allele == ref ~ "ref",
+  risk_allele == alt ~ "alt",
+  !grepl(",", alt) & rc_check(risk_allele) == ref ~ "ref",
+  !grepl(",", alt) & rc_check(risk_allele) == alt ~ "alt",
+  T ~ "unknown"))
+
+```
+
+Merge into library table
+```{r}
+
+haplo_gwas_coll <- haplo_gwas %>% dplyr::select(rsID, risk_allele_ref_alt) %>% distinct() %>%
+  group_by(rsID) %>% summarise(gwas_risk_allele = paste("", risk_allele_ref_alt, sep="", collapse=","))
+lib_merge <- left_join(lib, haplo_gwas_coll, by=c("leadSNP"="rsID"))
+write_tsv(lib_merge, here("output/lib_studies_idmerge_diseasesreannotated_gwasrisk.tsv"))
+```
+
+

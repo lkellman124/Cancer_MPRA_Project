@@ -1,0 +1,210 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-12-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+Compare activity and minor allele frequency
+Does minor allele frequency correlate with transcriptional activity?
+Does it correlate with differential transcriptional activity?
+Are SNPs with higher minor allele frequencies more likely to be differentially active (or less)?
+
+```{r}
+haplo_data <- read_tsv(here("data/cmpra_haploreg_data_withquery.tsv"))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+mpraq <- read_tsv(here("output/mpranalyze_quantitative_results.tsv"))
+
+```
+
+
+Have allele frequencies for AMR, ASN, AFR, EUR
+Start with transcriptional activity
+```{r}
+af <- dplyr::select(haplo_data, rsID, ref, alt, AFR, AMR, ASN, EUR) %>%
+  distinct()
+afq <- inner_join(af, dplyr::select(mpraq, celltype, locus, oligo_id, 
+                                    Causal_SNP, statistic, zscore, fdr, Ref, Alt),
+                  by = c("rsID" = "Causal_SNP"))
+# allele frequences range from 0 - 1, meaning they're not always the real minor allele
+# (they're alt, but not minor)
+
+celltypes = unique(unlist(str_split(res_merge$disease, ",")))
+cor_df_alpha <- data.frame()
+cor_df_zscore <- data.frame()
+cor_df_logfdr <- data.frame()
+
+for (cell in celltypes){
+  q_cell <- dplyr::filter(afq, celltype == cell)
+  alpha_df <- data.frame(cell = cell,
+                         afr_cor = cor.test(q_cell$AFR, q_cell$statistic)$estimate,
+                         afr_cor_p = cor.test(q_cell$AFR, q_cell$statistic)$p.value,
+                         amr_cor = cor.test(q_cell$AMR, q_cell$statistic)$estimate,
+                         amr_cor_p = cor.test(q_cell$AMR, q_cell$statistic)$p.value,
+                         asn_cor = cor.test(q_cell$ASN, q_cell$statistic)$estimate,
+                         asn_cor_p = cor.test(q_cell$ASN, q_cell$statistic)$p.value,
+                         eur_cor = cor.test(q_cell$EUR, q_cell$statistic)$estimate,
+                         eur_cor_p = cor.test(q_cell$EUR, q_cell$statistic)$p.value)
+  z_df <- data.frame(cell = cell,
+                         afr_cor = cor.test(q_cell$AFR, q_cell$zscore)$estimate,
+                         afr_cor_p = cor.test(q_cell$AFR, q_cell$zscore)$p.value,
+                         amr_cor = cor.test(q_cell$AMR, q_cell$zscore)$estimate,
+                         amr_cor_p = cor.test(q_cell$AMR, q_cell$zscore)$p.value,
+                         asn_cor = cor.test(q_cell$ASN, q_cell$zscore)$estimate,
+                         asn_cor_p = cor.test(q_cell$ASN, q_cell$zscore)$p.value,
+                         eur_cor = cor.test(q_cell$EUR, q_cell$zscore)$estimate,
+                         eur_cor_p = cor.test(q_cell$EUR, q_cell$zscore)$p.value)
+  fdr_df <- data.frame(cell = cell,
+                         afr_cor = cor.test(q_cell$AFR, -log10(q_cell$fdr))$estimate,
+                         afr_cor_p = cor.test(q_cell$AFR, -log10(q_cell$zscore))$p.value,
+                         amr_cor = cor.test(q_cell$AMR, -log10(q_cell$zscore))$estimate,
+                         amr_cor_p = cor.test(q_cell$AMR, -log10(q_cell$zscore))$p.value,
+                         asn_cor = cor.test(q_cell$ASN, -log10(q_cell$zscore))$estimate,
+                         asn_cor_p = cor.test(q_cell$ASN, -log10(q_cell$zscore))$p.value,
+                         eur_cor = cor.test(q_cell$EUR, -log10(q_cell$zscore))$estimate,
+                         eur_cor_p = cor.test(q_cell$EUR, -log10(q_cell$zscore))$p.value)
+  cor_df_alpha <- rbind(cor_df_alpha, alpha_df)
+  cor_df_zscore <- rbind(cor_df_zscore, z_df)
+  cor_df_logfdr <- rbind(cor_df_logfdr, fdr_df)
+  
+  
+}
+cor_df_logfc <- cor_df_logfc %>%
+  mutate(amr_cor_p = p.adjust(amr_cor_p, method = "fdr"),
+         afr_cor_p = p.adjust(afr_cor_p, method = "fdr"),
+         asn_cor_p = p.adjust(asn_cor_p, method = "fdr"),
+         eur_cor_p = p.adjust(eur_cor_p, method = "fdr"))
+cor_df_logfc_abs <- cor_df_logfc_abs %>%
+  mutate(amr_cor_p = p.adjust(amr_cor_p, method = "fdr"),
+         afr_cor_p = p.adjust(afr_cor_p, method = "fdr"),
+         asn_cor_p = p.adjust(asn_cor_p, method = "fdr"),
+         eur_cor_p = p.adjust(eur_cor_p, method = "fdr"))
+
+
+ggplot(afc, aes(x = EUR, y = hmec_logFC)) + 
+  geom_point(size = 0.1)
+```
+
+```{r}
+af <- dplyr::select(haplo_data, rsID, ref, alt, AFR, AMR, ASN, EUR) %>%
+  distinct()
+afq <- inner_join(af, dplyr::select(mpraq, celltype, locus, oligo_id, 
+                                    Causal_SNP, statistic, zscore, fdr, Ref, Alt),
+                  by = c("rsID" = "Causal_SNP"))
+cor(afq$AMR, afq$statistic, use = "complete.obs" )
+cor(afq$ASN, afq$statistic, use = "complete.obs" )
+cor(afq$AFR, afq$statistic, use = "complete.obs" )
+cor(afq$EUR, afq$statistic, use = "complete.obs" )
+
+cor(afq$AMR, afq$zscore, use = "complete.obs" )
+cor(afq$ASN, afq$zscore, use = "complete.obs" )
+cor(afq$AFR, afq$zscore, use = "complete.obs" )
+cor(afq$EUR, afq$zscore, use = "complete.obs" )
+
+cor(afq$AMR[!afq$fdr == 0], -log10(afq$fdr[!afq$fdr == 0]), use = "complete.obs" )
+cor(afq$ASN[!afq$fdr == 0], -log10(afq$fdr[!afq$fdr == 0]), use = "complete.obs" )
+cor(afq$AFR[!afq$fdr == 0], -log10(afq$fdr[!afq$fdr == 0]), use = "complete.obs" )
+cor(afq$EUR[!afq$fdr == 0], -log10(afq$fdr[!afq$fdr == 0]), use = "complete.obs" )
+
+ggplot(afq, aes(x = EUR, y = statistic)) + 
+  geom_point(size = 0.1)
+```
+```{r}
+af <- dplyr::select(haplo_data, rsID, ref, alt, AFR, AMR, ASN, EUR) %>%
+  distinct()
+afc <- inner_join(af, res_merge[c(1, 45, 2:43, 72)],
+                  by = c("rsID" = "Causal_SNP"))
+# allele frequences range from 0 - 1, meaning they're not always the real minor allele
+# (they're alt, but not minor)
+
+celltypes = unique(unlist(str_split(res_merge$disease, ",")))
+cor_df_logfc <- data.frame()
+cor_df_logfc_abs <- data.frame()
+for (cell in celltypes){
+  logFC <- afc[grepl("logFC", colnames(afc)) & grepl(cell, colnames(afc))]
+  abs_df <- data.frame(cell = cell,
+                   amr_cor = cor.test(afc$AMR, abs(logFC[[1]]))$estimate,
+                   amr_cor_p = cor.test(afc$AMR, abs(logFC[[1]]))$p.value,
+                   afr_cor = cor.test(afc$AFR, abs(logFC[[1]]))$estimate,
+                   afr_cor_p = cor.test(afc$AFR, abs(logFC[[1]]))$p.value,
+                   asn_cor = cor.test(afc$ASN, abs(logFC[[1]]))$estimate,
+                   asn_cor_p = cor.test(afc$ASN, abs(logFC[[1]]))$p.value,
+                   eur_cor = cor.test(afc$EUR, abs(logFC[[1]]))$estimate,
+                   eur_cor_p = cor.test(afc$EUR, abs(logFC[[1]]))$p.value)
+  cor_df_logfc_abs <- rbind(cor_df_logfc_abs, abs_df)
+  fc_df <- data.frame(cell = cell,
+                   amr_cor = cor.test(afc$AMR, logFC[[1]])$estimate,
+                   amr_cor_p = cor.test(afc$AMR, logFC[[1]])$p.value,
+                   afr_cor = cor.test(afc$AFR, logFC[[1]])$estimate,
+                   afr_cor_p = cor.test(afc$AFR, logFC[[1]])$p.value,
+                   asn_cor = cor.test(afc$ASN, logFC[[1]])$estimate,
+                   asn_cor_p = cor.test(afc$ASN, logFC[[1]])$p.value,
+                   eur_cor = cor.test(afc$EUR, logFC[[1]])$estimate,
+                   eur_cor_p = cor.test(afc$EUR, logFC[[1]])$p.value)
+  cor_df_logfc <- rbind(cor_df_logfc, fc_df)
+  
+}
+cor_df_logfc <- cor_df_logfc %>%
+  mutate(amr_cor_p = p.adjust(amr_cor_p, method = "fdr"),
+         afr_cor_p = p.adjust(afr_cor_p, method = "fdr"),
+         asn_cor_p = p.adjust(asn_cor_p, method = "fdr"),
+         eur_cor_p = p.adjust(eur_cor_p, method = "fdr"))
+cor_df_logfc_abs <- cor_df_logfc_abs %>%
+  mutate(amr_cor_p = p.adjust(amr_cor_p, method = "fdr"),
+         afr_cor_p = p.adjust(afr_cor_p, method = "fdr"),
+         asn_cor_p = p.adjust(asn_cor_p, method = "fdr"),
+         eur_cor_p = p.adjust(eur_cor_p, method = "fdr"))
+
+
+ggplot(afc, aes(x = EUR, y = hmec_logFC)) + 
+  geom_point(size = 0.1)
+```
+
+```{r}
+afc <- afc %>%
+  mutate(daSNV = ifelse(is.na(hit_spec), T, F))
+ggplot(afc, aes(x = AFR, col = daSNV)) +
+  geom_density()
+ggplot(afc, aes(x = AMR, col = daSNV)) +
+  geom_density()
+dasnv_eur  <- ggplot(afc, aes(x = EUR, col = daSNV)) +
+  geom_density() +
+  theme_minimal() +
+  theme(text = element_text(,size = 5, family = "Helvetica"),
+        legend.text = element_text(size =5, family = "Helvetica"),
+    legend.title = element_text(size =5, family = "Helvetica"),
+    legend.key.size = unit(0.2, 'cm'))
+ggsave(here("images/possible_supplementary_panels/allele_frequency_daSNVs_EUR.pdf"),
+         dasnv_eur,
+         width = 50, height = 40, units = "mm")
+
+ggplot(afc, aes(x = ASN, col = ifelse(is.na(hit_spec), T, F))) +
+  geom_density()
+
+afq <- afq %>%
+  mutate(tx_active = ifelse(fdr < 0.05, T, F))  
+
+ggplot(dplyr::filter(afq, !is.na(fdr)), aes(x = AFR, col = ifelse(fdr < 0.05, T, F))) +
+  geom_density()
+ggplot(dplyr::filter(afq, !is.na(fdr)), aes(x = AMR, col = ifelse(fdr < 0.05, T, F))) +
+  geom_density()
+q_eur <- ggplot(dplyr::filter(afq, !is.na(fdr)), aes(x = EUR, col = tx_active)) +
+  geom_density() +
+  theme_minimal() +
+  theme(text = element_text(,size = 5, family = "Helvetica"),
+        legend.text = element_text(size =5, family = "Helvetica"),
+    legend.title = element_text(size =5, family = "Helvetica"),
+    legend.key.size = unit(0.2, 'cm'))
+ggsave(here("images/possible_supplementary_panels/allele_frequency_txactive_EUR.pdf"),
+         q_eur,
+         width = 50, height = 40, units = "mm")
+ggplot(dplyr::filter(afq, !is.na(fdr)), aes(x = ASN, col = ifelse(fdr < 0.05, T, F))) +
+  geom_density()
+```
+

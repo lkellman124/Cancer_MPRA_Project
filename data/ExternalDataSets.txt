@@ -1,0 +1,60 @@
+Some publicly available data sets are not here - they are large.
+
+GWAS data:
+gwas_catalog_v1.0-associations_e109_r2023-06-03.tsv
+Download All Associations v1.0 from: https://www.ebi.ac.uk/gwas/docs/file-downloads
+
+eQTLgen gene-SNP pairs:
+2019-12-11-cis-eQTLsFDR0.05-ProbeLevel-CohortInfoRemoved-BonferroniAdded.txt
+Find at https://www.eqtlgen.org/cis-eqtls.html, download 'Significant cis-eQTLs
+This version is from 2019-12-11
+
+
+GTEx lookup table:
+GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.txt
+Find at https://gtexportal.org/home/datasets in Reference section
+
+GTEx gene-SNP pairs:
+Using GTEx v8
+From https://gtexportal.org/home/datasets, use GTEx_Analysis_v8_eQTL.tar. Used only signif_variant_gene_pairs files
+Used tissues: Brain_Amygdala, Brain_Anterior, Brain_Caudate, Brain_Cerebellar, Brain_Cerebellum, Brain_Cortex, Brain_Frontal_Cortex, Brain_Hippocampus, Brain_Hypothalamus, Brain_Nucleus_accumbens, Brain_Putamen_basal_ganglia, Brain_Spinal_cord_cervical, Brain_Substantia_nigra, Breast_Mammary_tissue, Cells_EBV-transformed_lymphocytes, Colon_Sigmoid, Colon_Transverse, Esophagus_Gastroesophageal_Junction, Esophagus_Mucosa, Esophagus_Muscularis, Kidney_Cortex, Lung, Ovary, Pancreas, Prostate, Skin_Not_Sun_Exposed_Suprapubic, Skin_Sun_Exposed_Lower_leg, Thyroid, Uterus.
+
+Merged SNP IDs:
+RsMergeArch.bcp
+From ftp://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606/database/organism_data
+Date modified 2/10/2018
+
+GWAS Catalog:
+gwas_catalog_v1.0-associations_e96_r2019-10-14 - https://www.ebi.ac.uk/gwas/docs/file-downloads
+
+DHS signal correlation data sets:
+Downloaded from ENCODE
+data/DHS_data/files.txt
+data/DHS_data/metadata.tsv
+
+DAP-G GTEx fine-mapping data:
+Downloaded from GTEx portal
+https://www.gtexportal.org/home/downloads/adult-gtex/qtl
+Fine-mapping cis-eQTL Data section, GTEx_v8_finemapping_DAPG.tar
+
+DepMap:
+From DepMap Public 23Q2
+https://depmap.org/portal/download/all/
+Files:
+AchillesCommonEssentialControls.csv
+CRISPRGeneDependency.csv
+Model.csv
+
+LD_RNAseq_RSEM/:
+RSEM results from Dr. Laura Donohue's RNA-seq on these cell lines
+Donohue, et al. Cell Genomics. 2022
+
+ATAC and HiChIP allele specific signal:
+vcf_df_all_hichip.csv
+vcf_df_all_atac_7.14.21.csv
+Derives from Dr. Laura Donohue's ATAC and HiChIP 
+Processed by Dr. Margaret Guo, see Supplementary Information in her paper, Guo et al. Nature Genetics 2023, and her GitHub:
+https://github.com/mguo123/pan_omics_psych/tree/master
+
+
+

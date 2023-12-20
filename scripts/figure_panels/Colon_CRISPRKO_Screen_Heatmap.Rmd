@@ -1,0 +1,378 @@
+---
+title: "CRISPR KO Screen Heatmap"
+output: html_document
+date: "2023-06-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pheatmap)
+library(viridis)
+library(RColorBrewer)
+library(here)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+I processed CRISPR data into counts table (commands in FASTQ_Analysis/NextSeq_CRISPRKO_Analysis.txt) 
+Then Douglas ran Mageck-RRA
+
+In this script:
+Check false negative rate (using known essential genes)
+Plot a heatmap of the tumor results
+Output a supplemental table of the results
+Look at relationship to DepMap results
+
+
+Use revised RRA outputs
+/oak/stanford/groups/khavari/users/dfporter/lk/crispr/outs/DLD1/rra/Tumor.rra.gene_summary.txt
+
+Read in the results
+```{r}
+controls <- read_tsv(here("data/CRISPRKO_EssentialGenes.txt"))
+res_files <- list.files(here("data/DP_mageck_coloncrisprko_outputs"), full.names = T)
+crispr_res <- data.frame()
+for (file in res_files){
+  res = read_tsv(file)
+  sample_name = str_remove(str_remove(file, "^.*/"), "\\..*$")
+  res$sample <- sample_name
+  crispr_res <- bind_rows(crispr_res, res)
+}
+
+crispr_res <- crispr_res %>%
+  mutate(cell_type = str_remove(sample, "_.*"),
+         sample_type = str_remove(sample, "^.*_"))
+```
+
+Read in DepMap Achilles common essential controls
+```{r}
+common_essentials <- read_csv(here("data/DepMap/AchillesCommonEssentialControls.csv"))
+common_essentials <- common_essentials %>%
+  separate(Gene, into = c("gene", "gene_number"), sep = " ")
+crispr_res <- crispr_res %>%
+  mutate(added_control = ifelse(id %in% controls$gene[controls$type == "added_control"],
+                                T, F),
+         achilles_common_essential = ifelse(id %in% common_essentials$gene, T, F))
+table(distinct(dplyr::select(crispr_res, id, added_control,
+                             achilles_common_essential))[2:3])
+# 17 endogenous common essentials
+# 4 added controls (from Hart, et al 2017, 2 of which aren't on the Achilles list)
+```
+Assess false negative rate in each celltype/format
+```{r}
+common_essential_results <- crispr_res %>%
+  dplyr::filter(achilles_common_essential) %>%
+  group_by(cell_type, sample_type) %>%
+  summarise(num_neg = sum(`neg|fdr` < 0.05)/length(`neg|fdr`))
+```
+SW948_2D captures the added controls at a low rate - remove it
+```{r}
+crispr_res <- dplyr::filter(crispr_res, !(cell_type == "SW948" & 
+                                            sample_type == "2D"))
+
+```
+
+
+Format supplemental table
+```{r}
+format_df <- crispr_res %>%
+  rename(gene = id, ) %>%
+  mutate(gene_type = case_when(
+    gene %in% added_controls ~ "added_common_essential",
+    gene %in% endo_common_essential ~ "ptGene_common_essential",
+    T ~ "ptGene")) %>%
+  dplyr::select(-added_control, -achilles_common_essential)
+    
+write_tsv(format_df, here("output/SupplementaryTables/crispr_ko_results.tsv"))
+```
+
+Remove the added controls going forward:
+```{r}
+crispr_res <- dplyr::filter(crispr_res, !added_control)
+```
+
+How many are significant in at least one tumor?
+How many are significant across multiple?
+```{r}
+crispr_res_grp <- crispr_res %>%
+  dplyr::filter(sample_type == "Tumor") %>%
+  group_by(id) %>%
+  summarise(num_neg_sig = sum(`neg|fdr` < 0.05),
+            num_pos_sig = sum(`pos|fdr` < 0.05)) %>%
+  mutate(sig_any = num_neg_sig + num_pos_sig)
+sum(crispr_res_grp$sig_any > 0)/dim(crispr_res_grp)[1]
+sum(crispr_res_grp$num_neg_sig > 1)
+sum(crispr_res_grp$num_pos_sig > 1)
+sum(crispr_res_grp$sig_any > 1)
+
+control_res <- dplyr::filter(crispr_res, achilles_common_essential)
+sum(control_res$`neg|fdr` < 0.05)/dim(control_res)[1]
+sum(control_res$`neg|lfc` < 0)/dim(control_res)[1]
+sum(control_res[control_res$sample_type == "Tumor",]$`neg|lfc` < 0)/dim(control_res[control_res$sample_type == "Tumor",])[1]
+
+```
+How many colon loci have a sig gene?
+```{r}
+crispr_sig_tumor_genes <-crispr_res_grp$id[crispr_res_grp$sig_any > 0]
+crispr_sig_genes <-unique(crispr_res$id[crispr_res$`neg|fdr` < 0.05 |
+                                   crispr_res$`pos|fdr` < 0.05])
+
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+colon_res <- dplyr::filter(res_merge, grepl("colon", disease))
+colon_res <- colon_res %>%
+  dplyr::select(Causal_SNP, lead_snp, hit_spec, hichip_egene, 
+                genes_within_10kb,
+                gtex_egenes_spec, eqtlgen_egenes) %>%
+  pivot_longer(cols = c(-Causal_SNP, -lead_snp, -hit_spec),
+                names_to = "source", values_to = "ptgene") %>%
+  mutate(ptgene = str_split(ptgene, ",|;")) %>%
+  unnest(ptgene)
+colon_res <- colon_res %>%
+  mutate(sig_crispr = ifelse(ptgene %in% crispr_sig_tumor_genes, T, F))
+
+colon_res_lead <- colon_res %>% 
+  dplyr::filter(!is.na(hit_spec)) %>%
+  dplyr::select(lead_snp, ptgene, sig_crispr) %>%
+  distinct() %>%
+  group_by(lead_snp) %>%
+  summarise(num_crispr_sig = sum(sig_crispr))
+
+sum(colon_res_lead$num_crispr_sig > 0)/dim(colon_res_lead)[1]
+
+colon_res_lead <- colon_res %>% 
+  dplyr::filter(!is.na(hit_spec)) %>%
+  dplyr::select(lead_snp, ptgene, sig_crispr) %>%
+  distinct() %>%
+  mutate(lead_snp = str_split(lead_snp, ",")) %>%
+  unnest(lead_snp) %>%
+  group_by(lead_snp) %>%
+  summarise(num_crispr_sig = sum(sig_crispr))
+
+sum(colon_res_lead$num_crispr_sig > 0)/dim(colon_res_lead)[1]
+
+```
+Filter for sig FDRs and make matrices of log fold change and fdr for the heatmap
+
+```{r}
+p_cut = 0.05
+# filter for fdr < p_cut, in pos or neg direction
+genes_to_keep <- crispr_res %>%
+  dplyr::filter(sample_type == "Tumor") %>%
+  dplyr::filter(`neg|fdr` < p_cut | `pos|fdr` < p_cut)
+genes_to_keep <- unique(genes_to_keep$id)
+
+crispr_res_filt <- crispr_res %>%
+  dplyr::filter(sample_type == "Tumor" & id %in% genes_to_keep)
+lfc_filt <- crispr_res_filt %>%
+  dplyr::select(sample, id, `neg|lfc`) %>%
+  pivot_wider(names_from = "sample", values_from = "neg|lfc")
+lfc_mat_filt <- column_to_rownames(lfc_filt, "id")
+
+fdr_mat_filt <- crispr_res_filt %>% rowwise() %>%
+  mutate(fdr = min(`neg|fdr`, `pos|fdr`)) %>%
+  mutate(logfdr = -log10(fdr),
+         fdr_bin = ifelse(fdr < 0.05, "yes", "no")) %>%
+  dplyr::select(id, sample, logfdr) %>%
+  pivot_wider(names_from = "sample", values_from = "logfdr")
+fdr_mat_filt <- column_to_rownames(fdr_mat_filt, "id")
+
+lfc_mat_filt <- dplyr::select(lfc_mat_filt, HCT116_Tumor, DLD1_Tumor, SW948_Tumor)
+lfc_mat_filt <- lfc_mat_filt[order(lfc_mat_filt$HCT116_Tumor, 
+                                   lfc_mat_filt$DLD1_Tumor, 
+                                   lfc_mat_filt$SW948_Tumor),]
+
+```
+
+
+```{r}
+# switch column annotation to same order as logfc df
+fdr_mat_reorder <- fdr_mat_filt[rownames(lfc_mat_filt),c(2,1,3)]
+colnames(fdr_mat_reorder) <- c('HCT116 FDR', 'DLD1 FDR', 'SW948 FDR')
+col_fun_annot = circlize::colorRamp2(c(0, 4.5), c("white", "black"))
+anno_colors <- list(`HCT116 FDR` = col_fun_annot,
+                    `DLD1 FDR` = col_fun_annot,
+                     `SW948 FDR` = col_fun_annot)
+
+
+start = min(lfc_mat_filt[1:3])
+end = max(lfc_mat_filt[1:3])
+col_fun = circlize::colorRamp2(c(start, 0, end), colors = c("royalblue4", "white", "firebrick3"))
+
+
+ch_annot <- HeatmapAnnotation(df = fdr_mat_reorder,
+                              col = anno_colors,
+                              annotation_name_gp = gpar(fontsize = 5, family = "Helvetica"),
+                              gp = gpar(fontsize = 5, family = "Helvetica"),
+                              simple_anno_size = unit(1, 'mm'),
+                              gap = unit(1, "mm"),
+                              annotation_legend_param = list(title = "FDR",
+                                                         title_gp = gpar(fontsize = 5,
+                                                                         fontface = "bold",
+                                                                         family = "Helvetica"),
+                                                         labels_gp = gpar(fontsize = 5,
+                                                                          family = "Helvetica"),
+                                                         legend_height = unit(20, 'mm'),
+                                                         grid_width = unit(2, 'mm')))
+                                
+                                
+
+crispr_plot <- ComplexHeatmap::Heatmap(t(lfc_mat_filt),
+                             col = col_fun,
+                             cluster_rows = F,
+                             cluster_columns = F,
+                             heatmap_width = unit(165, 'mm'),
+                             heatmap_height = unit(30, 'mm'),
+                          split = c(1,2,3),
+                             show_row_names = T,
+                             show_row_dend = T,
+                             row_dend_width = unit(5, "mm"),
+                             column_dend_height = unit(3, "mm"),
+                             top_annotation = ch_annot,
+                             heatmap_legend_param = list(title = "LogFC",
+                                                         title_gp = gpar(fontsize = 5,
+                                                                         fontface = "bold",
+                                                                         family = "Helvetica"),
+                                                         labels_gp = gpar(fontsize = 5,
+                                                                          family = "Helvetica"),
+                                                         legend_height = unit(20, 'mm'),
+                                                         grid_width = unit(2, 'mm')),
+                             column_names_gp = gpar(fontsize = 5, family = "Helvetica"),
+                             row_names_gp = gpar(fontsize = 5, family = "Helvetica"))
+
+draw(crispr_plot)
+
+pdf(here('images/figure_panels/crispr_ko_heatmap_ch_filt.pdf'),
+    width = 8.8, height = 3)
+draw(crispr_plot)
+dev.off()
+
+```
+Compare to DepMap data
+Read in DepMap data
+```{r}
+models <- read_csv(here("data/DepMap/Model.csv"))
+dep_data <- read_csv(here("data/DepMap/CRISPRGeneDependency.csv"))
+```
+Annotate all genes with mpra_gene (in library, not attached to colon SNV), colon_ptgene (colon ptGene), colon_mpra_gene (in library, associated with colon SNV)
+```{r}
+all_colon_mpra <- dplyr::select(res_merge, locus, disease, hit_spec,
+                                genes_within_10kb, hichip_egene, eqtlgen_egenes,
+                                gtex_egenes_spec) %>%
+  pivot_longer(cols = c(-locus, -disease, -hit_spec),
+               names_to = "source",
+               values_to = "gene")
+all_colon_mpra <- all_colon_mpra %>%
+  mutate(gene = str_split(gene, ",|;")) %>%
+  unnest(gene) %>%
+  dplyr::select(-source) %>%
+  group_by(gene) %>%
+  summarise(mpra_gene = T,
+            mpra_ptgene = ifelse(sum(!is.na(hit_spec)) > 0, T, F),
+            colon_mpra_gene = ifelse(sum(grepl("colon", disease)) > 0, T, F),
+            colon_ptgene = ifelse(sum(grepl("colon", hit_spec)) > 0, T, F),
+            colon_mpra_sum = case_when(
+              colon_ptgene ~ "colon_ptgene",
+              colon_mpra_gene ~ "colon_mpra_gene",
+              mpra_gene ~ "mpra_gene"))
+                                    
+```
+
+```{r}
+colnames(dep_data) <- str_remove(colnames(dep_data), " .*")
+```
+
+```{r}
+colon_lines <- models$ModelID[models$OncotreeCode %in% c("COADREAD", "COAD", "READ", "DA")]
+```
+Condense crispr res, limit to tumor samples
+```{r}
+fdr_cut = 0.05
+crispr_con <- crispr_res %>%
+  dplyr::select(id, neg_fdr = `neg|fdr`, lfc = `neg|lfc`,
+                pos_fdr = `pos|fdr`, sample)
+crispr_con_grp <- crispr_con %>%
+  dplyr::filter(grepl("Tumor", sample)) %>%
+  group_by(id) %>%
+  summarise(crispr_sig = case_when(
+    sum(neg_fdr < fdr_cut) > 0 &
+      sum(pos_fdr < fdr_cut) > 0  ~ "mixed",
+    sum(neg_fdr < fdr_cut) > 0 ~ "neg",
+    sum(pos_fdr < fdr_cut) > 0 ~ "pos",
+    T ~ "not_sig"))
+```
+
+```{r}
+gene_df <- data.frame(gene = colnames(dep_data)[!colnames(dep_data) == "ModelID"])
+gene_df <- left_join(gene_df, all_colon_mpra)
+gene_df <- left_join(gene_df, crispr_con_grp,
+                     by = c("gene" = "id"))
+```
+
+```{r}
+dep_data_t <- t(column_to_rownames(dep_data, var = "ModelID"))
+dep_data_t <- rownames_to_column(as.data.frame(dep_data_t), var = "gene")
+colon_lines_in_data <- colon_lines[colon_lines %in% colnames(dep_data_t)]
+
+dep_data_mean <- dep_data_t
+dep_data_mean$dep_mean <- apply(dplyr::select(dep_data_t, starts_with("ACH")),
+                                  1, mean, na.rm=T)
+dep_data_mean$dep_median <- apply(dplyr::select(dep_data_t, starts_with("ACH")),
+                                  1, median, na.rm=T)
+dep_data_mean$dep_colon_mean <- apply(dplyr::select(dep_data_t, all_of(colon_lines_in_data)),
+                                  1, mean, na.rm=T)
+dep_data_mean$dep_colon_median <- apply(dplyr::select(dep_data_t, all_of(colon_lines_in_data)),
+                                  1, median, na.rm=T)
+
+gene_df <- left_join(gene_df, dplyr::select(dep_data_mean, gene, 
+                                            dep_mean, dep_colon_mean,
+                                            dep_median, dep_colon_median))
+# Many of the genes were essential both in colon cell lines and more broadly. MPRA associated genes tended to have slightly higher gene dependency scores based on DepMap gene dependency probability estimates74–76 than the set of all genes (0.166 vs. 0.142, p = 2.8e-05).
+t.test(gene_df$dep_mean[!is.na(gene_df$mpra_gene)],
+       gene_df$dep_mean[is.na(gene_df$mpra_gene)])
+
+# MPRA ptGenes are slightly higher than that (0.174), but not significant compared to the set of all MPRA associated genes.
+t.test(gene_df$dep_mean[!is.na(gene_df$mpra_ptgene) &
+                          gene_df$mpra_ptgene],
+       gene_df$dep_mean[!is.na(gene_df$mpra_ptgene) & 
+                          !gene_df$mpra_ptgene])
+
+# Colon ptGenes had slightly higher dependency scores in colon cell lines than in other cell lines (0.200 vs. 0.164), but the difference was not significant (p = 0.15). 
+t.test(gene_df$dep_colon_mean[!is.na(gene_df$colon_ptgene) &
+                          gene_df$colon_ptgene],
+       gene_df$dep_mean[!is.na(gene_df$colon_ptgene) &
+                          gene_df$colon_ptgene])
+
+```
+
+```{r}
+crispr_merge <- crispr_con %>%
+  dplyr::select(id, lfc, sample) %>%
+  pivot_wider(names_from = "sample",
+              values_from = "lfc")
+
+crispr_merge <- crispr_con %>%
+  dplyr::select(id, neg_fdr, sample) %>%
+  mutate(neg_fdr = -log10(neg_fdr)) %>%
+  pivot_wider(names_from = "sample",
+              values_from = "neg_fdr")
+
+crispr_merge <- inner_join(crispr_merge, dep_data_mean,
+  by = c("id" = "gene"))
+
+cor(crispr_merge$DLD1_2D, crispr_merge$DLD1_Tumor)
+cor(crispr_merge$DLD1_2D, crispr_merge$`ACH-001061`)
+cor(crispr_merge$DLD1_Tumor, crispr_merge$`ACH-001061`)
+
+cor(crispr_merge$HCT116_2D, crispr_merge$HCT116_Tumor)
+cor(crispr_merge$HCT116_2D, crispr_merge$`ACH-000971`, use = "complete.obs")
+cor(crispr_merge$HCT116_Tumor, crispr_merge$`ACH-000971`, use = "complete.obs")
+
+cor(crispr_merge$SW948_Tumor, crispr_merge$`ACH-000680`, use = "complete.obs")
+
+
+ggplot(crispr_merge, aes(x = DLD1_Tumor, y = `ACH-001061`)) +
+  geom_point()
+```
+
+

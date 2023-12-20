@@ -1,0 +1,90 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-06-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(here)
+```
+
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+```
+
+```{r}
+res_long  <- res_merge[c(1, 53, 72, grep("fdr|logFC", colnames(res_merge)))]
+res_long <- res_long %>%
+  pivot_longer(cols = -c("locus", "disease", "hit_spec"),
+               names_to = "celltype",
+               values_to = "measurement") %>%
+  separate(celltype, into = c("celltype", "measure"), sep = "_") %>%
+  distinct() %>%
+  pivot_wider(names_from = "measure", values_from = "measurement")
+res_long_unnest <- res_long %>%
+  mutate(disease = str_split(disease, ",")) %>%
+  unnest(cols = "disease")
+
+res_filt <- res_long_unnest %>% dplyr::filter(disease == celltype)
+
+```
+
+```{r}
+cancer_color_key <- read_tsv(here("data/celltype_name_colors.txt"))
+
+```
+
+```{r}
+res_filt <- res_filt %>% rowwise() %>%
+  mutate(cancer_type =  cancer_color_key$cancer[cancer_color_key$celltype == disease])
+
+
+res_filt <- res_filt %>%
+  mutate(significant = ifelse(fdr < 0.05, cancer_type, "Not a hit"))
+
+```
+
+
+Formatting colors
+```{r}
+cancer_colors <- cancer_color_key %>%
+  dplyr::select(cancer, color) %>%
+  dplyr::filter(!is.na(cancer))
+
+add_mult = data.frame(cancer = c("Multiple", "Not a hit"),
+                      color = c("black", "grey"))
+cancer_colors <- rbind(cancer_colors, add_mult)
+cancer_color_list <- cancer_colors$color
+names(cancer_color_list) <- cancer_colors$cancer
+```
+
+```{r}
+cancer_order <- sort(unique(res_filt$significant[!res_filt$significant == "Not a hit"]))
+cancer_order <- c(cancer_order, "Not a hit")
+res_filt$significant <- factor(res_filt$significant,
+                               ordered = T,
+                               levels = cancer_order)
+```
+
+```{r}
+volcplot <- ggplot(res_filt, aes(x=logFC,y = -log10(fdr), col=significant)) + 
+  geom_point(size = 0.01) + 
+  scale_color_manual(values = cancer_color_list) +
+  labs(x = "MPRA Log Fold Change", y = "-log10(FDR)",
+      col="Cancer") + 
+  ylim(c(0, 13)) + 
+  theme_minimal() +
+  theme(text = element_text(size=5), legend.key.size = unit(0.25, 'lines'))
+#  volcplot
+
+ggsave(here("images/figure_panels/volcano_plot.pdf"), 
+       device="pdf", plot = volcplot, width = 90, height = 42, unit = "mm", dpi="print")
+```
+
+
+       

@@ -1,0 +1,40 @@
+ANALYZE CRISPR KO SCREEN DATA
+
+
+Build bowtie2 index for CRISPR KO barcodes
+bowtie2-build ~/Documents/MPRA/Cancer_MPRA_Scaleup/CRISPR_KO_Screen/BowtieIndex/colon_crispr_ko_index.fa colon_crispr_ko_index
+
+Sequencing library layout:
+UMI is in first 9bp
+Guide is 31-50bp
+
+# 0. Unzip file
+gunzip  1_S1_L001_R1_001.fastq.gz 
+
+# 1.  Extract the UMI
+umi_tools extract --bc-pattern=NNNNNNNNN --stdin=1_S1_L001_R1_001.fastq --stdout=1_umi_extracted.fastq 
+
+# 2. Trim to just the guide - now bases 22 through 41
+fastx_trimmer -f 22 -l 41 -Q33 -i 1_umi_extracted.fastq -o 1_umi_trimmed.fastq -v
+
+# 3. Align to bowtie index 
+bowtie2 -p 8 -k 1 --norc -x /Users/laurakellman/Documents/MPRA/Cancer_MPRA_Scaleup/CRISPR_KO_Screen/BowtieIndex/colon_crispr_ko_index 1_umi_trimmed.fastq -S 1-aligned.sam --no-unal
+
+# 4. Convert sam to bam 
+samtools view -S -b 1-aligned.sam > 1-aligned.bam
+
+# 5. Sort the bam
+samtools sort 1-aligned.bam -o 1-aligned-sorted.bam
+
+# 6. Index the bam
+samtools index 1-aligned-sorted.bam
+
+# 7. Deduplicate based on UMIs 
+umi_tools dedup -I 1-aligned-sorted.bam -L logfile_1.txt --out-sam --no-sort-output -S 1_dedup.sam
+
+# 8. Convert sam to tsv
+awk '$1 !~ /^@/ {print $1"\t"$3}' 1_dedup.sam > 1_reformat.tsv
+
+# 9. Count unique reads for each barcode
+umi_tools count_tab -I 1_reformat.tsv -S 1_counts.tsv -L 1_count.log
+

@@ -1,0 +1,66 @@
+---
+title: "Updating merged rsIDs"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(here)
+```
+
+```{r}
+lib_key <- read_tsv(here("data/ref_alt_snp_table.txt"))
+```
+
+Convert merged rsIDs to standard
+Using RsMergeArch.bcp from ftp://ftp.ncbi.nlm.nih.gov/snp/organisms/human_9606/database/organism_data, date modified 2/10/2018
+Reading in RsMergeArch and filtering down to only rele
+```{r}
+snp_ids <- unique(str_remove(c(lib_key$Causal_SNP, lib_key$leadSNP), "-newCEQTL"))
+snp_ids_nors <- str_remove(snp_ids, "^rs")
+merged_rs <- read_tsv(here("data/RsMergeArch.bcp"),
+                      col_names = c("rsID", "Current_rsID", "x1", "x2", "x3", "x4", "x5", "x6", "x7"))
+merged_rs <- dplyr::filter(merged_rs, rsID %in% snp_ids_nors | Current_rsID %in% snp_ids_nors)
+merged_rs <- merged_rs %>% mutate_all(as.character)
+no_merge <- snp_ids_nors[!(snp_ids_nors %in% c(merged_rs$rsID, merged_rs$Current_rsID))]
+# I think these are just ones that never merged
+```
+
+Now convert Causal_SNP to causal_rsID and leadSNP to lead_rsID
+```{r}
+lib_key <- lib_key %>% mutate(Cancer_eQTL = grepl("newCEQTL", Causal_SNP),
+                              Causal_SNP = str_remove(Causal_SNP, "-newCEQTL"),
+                              causal_rsID = str_remove(Causal_SNP, "rs"),
+                              lead_rsID = str_remove(leadSNP, "rs")) %>% rowwise() %>%
+  mutate(causal_rsID = ifelse(causal_rsID %in% merged_rs$rsID, merged_rs$Current_rsID[merged_rs$rsID == causal_rsID],
+                                                   causal_rsID),
+                              lead_rsID = ifelse(lead_rsID %in% merged_rs$rsID, merged_rs$Current_rsID[merged_rs$rsID == lead_rsID],
+                                                   lead_rsID))
+
+check = lib_key[!(str_remove(lib_key$Causal_SNP, "^rs")==lib_key$causal_rsID),]
+check_lead = lib_key[!(str_remove(lib_key$leadSNP, "^rs")==lib_key$lead_rsID),]
+
+```
+
+This catches 61 causal snps, 17 lead SNPs
+```{r}
+merged_rsid_conversion <- dplyr::select(lib_key, Causal_SNP, leadSNP, causal_rsID, lead_rsID)
+colnames(merged_rsid_conversion) <- c("Causal_SNP", "leadSNP", "causal_merged_rsID", "lead_merged_rsID")
+write_tsv(merged_rsid_conversion, here("output/lib_snps_merged_rsid_conversion.tsv"))
+```
+
+Now make a new library file
+
+```{r}
+merged_lib <- lib_key %>% mutate(Causal_SNP = str_c("rs", causal_rsID), leadSNP = str_c("rs", lead_rsID)) %>%
+  dplyr::select(-causal_rsID, - lead_rsID, -fa.name)
+write_tsv(merged_lib, here("output/lib_table_merged_rsids.tsv"))
+```
+
+
+
+
+
+

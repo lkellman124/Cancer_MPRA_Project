@@ -1,0 +1,60 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-04-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+library(here)
+library(png)
+library(ComplexHeatmap)
+```
+
+Use MPRAnalyze quantitative activity scores to cluster by transcriptional activity
+Remove scrambles, motifs and controls, remove 293T data
+Limit to sequences that are significant somewhere
+```{r}
+res_mq <- read_tsv(here("output/mpranalyze_quantitative_results.tsv"))
+name_key <- read_tsv(here("data/celltype_name_colors.txt"))
+```
+```{r}
+active_cutoff = 0.05
+active_oligos <- dplyr::filter(res_mq, pval.mad < active_cutoff)$oligo_id
+res_mq_filt <- dplyr::filter(res_mq, !celltype == "lx")
+activity_hm <- res_mq_filt %>%
+  dplyr::filter(!celltype %in% c("motif", "scramble")) %>%
+  dplyr::select(celltype, oligo_id, zscore) %>%
+  dplyr::filter(oligo_id %in% active_oligos) %>%
+  distinct() %>%
+  pivot_wider(names_from = "celltype", values_from = "zscore") %>%
+  column_to_rownames(var = "oligo_id")
+
+colnames(activity_hm) <- c("Airway", "Astrocyte", "Colon", "Endometrial", "Esophageal",
+                          "HMEC", "KC", "MC", "Ovarian",
+                          "Pancreatic", "Prostate", "Renal", "Thyroid")
+
+
+```
+
+
+Make it a dendrogram
+```{r}
+library(ggdendro)
+mat_dist <- dist(t(as.matrix(activity_hm)), diag = T)
+hc <- hclust(mat_dist)
+dhc <- as.dendrogram(hc)
+ggd <- ggdendrogram(dhc, rotate = FALSE, labels = F)
+
+ggsave(here("images/figure_panels/mpra_activity_cell_type_dendrogram.pdf"),
+       ggd,
+      width = 70, height = 30, units = "mm")
+
+ggdendrogram(dhc, rotate = FALSE, labels = T)
+```
+
+
+

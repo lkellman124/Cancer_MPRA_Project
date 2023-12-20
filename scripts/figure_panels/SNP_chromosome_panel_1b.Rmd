@@ -1,0 +1,140 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(here)
+```
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+```
+
+```{r}
+# get lead snp coords
+lead_snps <- unique(unlist(str_split(res_merge$lead_snp, ",")))
+write(lead_snps, here("output/lead_snp_list.txt"))
+lead_snp_coords <- read_tsv(here("data/lead_snp_coordinates_hg19_20230614"),
+                            col_names=c("chr", "start", "end", "snp"))
+# 54 SNPs are missing. Probably doesn't matter for this analysis
+lead_snps[!lead_snps %in% lead_snp_coords$snp]
+length(unique(lead_snps[!lead_snps %in% lead_snp_coords$snp]))
+
+dup <- duplicated(lead_snp_coords$snp)
+test <- lead_snp_coords[dup,]
+lead_snp_coords_filt <- dplyr::filter(lead_snp_coords, !grepl("_", chr))
+
+lead_snp_dis <- dplyr::select(dplyr::filter(res_merge, !is.na(disease)), lead_snp, disease)
+lead_snp_dis <- distinct(lead_snp_dis)
+lead_snp_dis <- lead_snp_dis %>% mutate(snp = str_split(lead_snp, ",")) %>% unnest(snp)
+lead_snp_dis <- distinct(lead_snp_dis)
+lead_snp_dis <- lead_snp_dis %>% group_by(snp) %>% 
+  summarise(disease = ifelse(length(disease) == 1, disease, paste(sort(unique(unlist(str_split(disease, ",")))), collapse=",")))
+lead_snp_dis <- inner_join(lead_snp_coords_filt, dplyr::select(lead_snp_dis, snp, disease))
+lead_snp_dis <- lead_snp_dis %>% mutate(Position = start, Chrom = str_remove(chr, "chr"))
+lead_snp_dis <- lead_snp_dis %>%  mutate(cancer_type = ifelse(grepl(",", disease), "multiple", disease))
+chromosomes = 1:22
+
+```
+Draw a box around each chromosome, have the full chromosome size
+```{r width = 3.5, height = 2}
+# convert to disease names
+lead_snp_dis_ref = lead_snp_dis %>% 
+  mutate(cancer_type = case_when(
+    cancer_type == "multiple" ~ "Multiple",
+    cancer_type == "hmec" ~ "BRCA",
+    cancer_type == "thy" ~ "THCA",
+    cancer_type == "airway" ~ "LUAD",
+    cancer_type == "colon" ~ "COAD",
+    cancer_type == "pros" ~ "PRAD",
+    cancer_type == "mc" ~ "SKCM",
+    cancer_type == "endo" ~ "UCEC",
+    cancer_type == "eso" ~ "ESCA",
+    cancer_type == "kc" ~ "KC",
+    cancer_type == "panc" ~ "PAAD",
+    cancer_type == "renal" ~ "KIRC",
+    cancer_type == "ast" ~ "GBM",
+    cancer_type == "ov" ~ "OVCA",
+    T ~ cancer_type))
+
+cancer_colors = c("THCA" = "yellow", 
+                  "ESCA" = "darkgoldenrod1",
+                  "PAAD" = "sienna1",
+                  "SKCM" = "tomato1",
+                  "BRCA" = "firebrick1",
+                  "COAD" = "pink",
+                  "UCEC" = "mediumpurple1",
+                  "LUAD" = "purple4",
+                  "KIRC" = "cadetblue1",
+                  "GBM" = "deepskyblue1",
+                  "PRAD" = "royalblue1",
+                  "KC" = "turquoise2",
+                  "OVCA" = "turquoise4",
+                  "Multiple" ="black")
+chromosomes = 1:22
+chrom_lens = c(249250621,243199373,198022430,191154276,180915260,
+               171115067,159138663,146364022,141213431, 135534747,
+               135006516, 133851895,115169878, 107349540, 102531392,
+               90354753, 81195210, 78077248, 59128983, 63025520,
+               48129895, 51304566)
+# https://www.ncbi.nlm.nih.gov/assembly/GCF_000001405.13/#/st
+offset= 0.4
+
+chrom_box_bottoms = data.frame(x_start =  chromosomes - offset,
+                              y_start = 0,
+                              x_end =offset + chromosomes ,
+                              y_end = 0)
+chrom_box_tops = data.frame(x_start =  chromosomes - offset,
+                              y_start = chrom_lens,
+                              x_end =offset + chromosomes ,
+                              y_end = chrom_lens)
+chrom_box_left = data.frame(x_start =  chromosomes - offset,
+                              y_start = 0,
+                              x_end =chromosomes - offset,
+                              y_end = chrom_lens)
+chrom_box_right = data.frame(x_start =  offset + chromosomes ,
+                              y_start = 0,
+                              x_end =offset + chromosomes ,
+                              y_end = chrom_lens)
+chrom_box_coords = rbind(chrom_box_bottoms, chrom_box_tops,
+                         chrom_box_left, chrom_box_right)
+lead_snp_dis_ref <- lead_snp_dis_ref %>% 
+  mutate(cancer_type = factor(cancer_type,
+                              levels = c("GBM", "BRCA",
+                                         "COAD", "UCEC",
+                                         "ESCA", "LUAD",
+                                         "SKCM", "OVCA", "PAAD",
+                                         "PRAD", "KIRC", "KC",
+                                         "THCA", "Multiple"), ordered=T))
+
+chrom_plot <- ggplot(lead_snp_dis_ref, aes(x=as.numeric(Chrom), y = Position, col=cancer_type)) + 
+  geom_point(size=0.01) +
+  scale_color_manual(values = cancer_colors, name="Cancer") + theme_classic() +
+  geom_jitter(height=0, size=0.005, width=.2) +
+#  labs(col ='Cancer Type') +
+#   ggtitle("Distribution of cancer-linked GWAS SNPs across chromosomes")  +
+  geom_segment(data=chrom_box_coords, 
+               aes(x=x_start, y=y_start, xend=x_end, yend=y_end), col="grey", size= 0.1) +
+  scale_x_discrete("Chromosome", breaks=1:22, labels=1:22, limits=0:23) +
+  theme(text = element_text(size = 6, family = "Helvetica"), legend.text = element_text(size=5),
+        axis.text.y = element_text(size = 4),
+        legend.spacing.y = unit(0.005, 'cm'), 
+        legend.spacing.x = unit(0.01, 'cm'),
+        legend.key.size = unit(0.5, 'lines'),
+    #    legend.title= element_blank(),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(8,0,0,-9))
+# legend.box.margin: 1 = top, 2 = right side, 3 = bottom, 4 = left side
+       
+chrom_plot
+
+ggsave(here("images/figure_panels/lead_snp_chrom_plot.pdf"),
+       plot = chrom_plot, device= "pdf",
+       width = 72, height = 42, units = "mm", dpi = "print")
+
+
+```

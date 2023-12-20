@@ -1,0 +1,34 @@
+---
+title: "Merge LD's RNA-seq results"
+output: html_document
+date: "2023-12-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Merge Laura Donohue's RNA-seq results (RSEM)
+Downloaded from oak/stanford/groups/khavari/users/lkhd/project/3D/RNA/hiseq/all_primary_cells_121619/RSEM/, gene.results files in individual sample folders
+
+```{r}
+filenames <- list.files(here("data/LD_RNAseq_RSEM"), full.names = T)
+rnaseq = data.frame()
+for (file in filenames){
+  df <- read_tsv(file)
+  sample_name = str_remove(str_remove(file, "^.*/"), ".genes.results")
+  df <- dplyr::select(df, gene_id, TPM) 
+  colnames(df) <- c("gene_id", paste(sample_name, "TPM", sep = "_"))
+  if (dim(rnaseq)[1] == 0){
+    rnaseq <- df
+  } else{  
+    rnaseq = full_join(rnaseq, df)
+  }
+}
+```
+
+```{r}
+write_tsv(rnaseq, here("output/merged_rnaseq_LD_gene_tpms.tsv"))
+
+```
+

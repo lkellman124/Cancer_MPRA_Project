@@ -1,0 +1,371 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-06-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(ggpubr)
+library(rstatix)
+
+```
+
+Make box plots or dot plots for the luciferase and MPRA results to compare
+Read in the MPRA counts, normalize for seq depth and to plasmid DNA (just divide)
+Read in the luciferase results
+
+Start with HMECs
+
+What do I want?
+For each cell type, set of side by side MPRA and luciferase results
+For rs55 I want hmec MPRA, airway MPRA, MCF7 luciferase
+
+Go back and fix the MPRA p values so they're MPRAnalyze instead of a t test
+
+Also includes rs10411210 MPRA and luciferase plots
+
+```{r}
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+```
+
+```{r}
+# supp plot params
+fig_height = 30
+fig_width = 30
+o_size = 0.2
+o_stroke = 0.3
+l_width = 0.15
+v_just = 0
+tip_length = 0
+p_size = 2
+```
+
+HMEC luciferase data
+
+```{r}
+brca_luc <- read_tsv(here("data/brca_luciferase_data.txt"))
+
+brca_luc <- brca_luc %>% mutate(snp_allele = paste(SNP, allele, sep="_")) %>%
+  rowwise() %>%
+  mutate(luc = mean(c(rep1, rep2, rep3, rep4, rep5)))
+brca_luc_long <- brca_luc %>% pivot_longer(cols = c(rep1, rep2, rep3, rep4, rep5), names_to = "rep",
+                                             values_to = "luc_vals")
+brca_luc_long <- brca_luc_long %>%
+  mutate(Allele = ifelse(allele == "ref", "Ref", "Alt"))
+comparisons <- list(c("Alt", "Ref"))
+
+
+for (snp in brca_luc$SNP){
+  df <- dplyr::filter(brca_luc_long, SNP == snp)
+  df_max <- max(df$luc_vals[!is.nan(df$luc_vals)])
+  p <- ggplot(df, 
+              aes(x = as.factor(Allele), y=luc_vals)) + 
+  geom_boxplot(outlier.shape = NA, linewidth = l_width,
+                 outlier.size = o_size, outlier.stroke = o_stroke) +
+  geom_jitter(width = 0.2, size = o_size, stroke = o_stroke) + theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 5, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5),
+        line=element_line(linewidth=0.2)) +
+  ggtitle(paste0(snp, " luciferase activity")) + 
+    labs(x = "Allele", y = "Luciferase activity") + 
+    stat_compare_means(method = "t.test", comparison = comparisons, label = "p.signif",
+                       tip.length = 0.01, vjust = v_just, size = p_size,
+                       label.y = df_max + 0.1*df_max) +
+        ylim(c(0, df_max + 0.3*df_max))
+  
+  
+  ggsave(here(paste0("images/possible_supplementary_panels/luciferase_plots/brca/",
+                     snp, "_luc.pdf")),
+         p,
+         width = fig_width, height = fig_height, units = "mm")
+}
+
+```
+Get normalized counts
+```{r}
+counts <- read_tsv(here("data/nextseq_counts_111920.tsv"))
+counts_norm <- counts %>%
+  mutate(across(where(is.numeric), ~ ./sum(.))) %>%
+  mutate(plasmid = plasmid_2 + plasmid_3) %>%
+  mutate(across(where(is.numeric), ~  ./plasmid))
+
+counts_norm <- counts_norm %>%
+  separate(oligo, into = c("junk", "locus_num", "allele", "barcode")) %>%
+  unite("locus", "junk", "locus_num", sep = "_")
+
+counts_norm <- left_join(dplyr::select(res_merge, locus, Causal_SNP),
+          counts_norm) %>%
+  mutate(Allele = ifelse(allele == "ref", "Ref", "Alt"))
+```
+
+```{r}
+brca_counts <- counts_norm %>%
+  dplyr::select(locus, Causal_SNP, Allele, barcode, hmec_1, hmec_2, hmec_3) %>%
+  pivot_longer(cols = c("hmec_1", "hmec_2", "hmec_3"), 
+               names_to = "replicate", values_to = "Activity")
+
+for (snp in brca_luc$SNP){
+  df <- dplyr::filter(brca_counts, Causal_SNP == snp)
+  df_max <- max(df$Activity[!is.nan(df$Activity)])
+  mpra_pval <- data.frame(
+    group1 = "Alt",
+    group2 = "Ref",
+    p = res_merge$hmec_fdr[res_merge$Causal_SNP == snp],
+  y.position = df_max + 0.1*df_max,
+    xmin = 1,
+    xmax = 2)
+  mpra_pval <- mpra_pval %>%
+    add_significance()
+  p <- ggplot(df, 
+              aes(x = as.factor(Allele), y=Activity)) + 
+    geom_boxplot(outlier.size = o_size, outlier.stroke = o_stroke,
+                 linewidth = l_width) +
+    theme_minimal() +
+    theme(text = element_text(size = 5),
+          plot.title = element_text(size = 5),
+          axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5)) +
+    ggtitle(paste0(snp, " MPRA activity")) + 
+      labs(x = "Allele", y = "MPRA activity") + 
+       stat_pvalue_manual(mpra_pval, label = "p.signif", tip.length = 0,
+                        vjust = v_just, size = p_size) +
+    ylim(c(0, df_max + 0.3*df_max))
+  ggsave(here(paste0("images/possible_supplementary_panels/mpra_single_snp_plots/brca/",
+                     snp, "_mpra.pdf")),
+         p,
+         width = fig_width, height = fig_height, units = "mm")
+
+}
+```
+
+Make the rs5 panels
+```{r eval=FALSE, include=FALSE}
+figwidth = 20
+figheight = 40
+snp = "rs58821592"
+# make the MPRA plot
+
+stat.test.hmpra <- data.frame(
+  group1 = "Alt",
+  group2 = "Ref",
+  p = res_merge$hmec_fdr[res_merge$Causal_SNP == snp],
+  y.position = 1.25,
+  xmin = 1,
+  xmax = 2)
+
+stat.test.hmpra <- stat.test.hmpra %>%
+  add_significance()
+
+h <- ggplot(dplyr::filter(brca_counts, Causal_SNP == snp), 
+              aes(x = as.factor(Allele), y=Activity)) + 
+  geom_boxplot(outlier.size = 0.1, linewidth = 0.3) +
+    theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 6, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 6),
+        line=element_line(linewidth=0.2)) +
+  ylim(0, 1.3) +
+  ggtitle(paste0(snp, "\nHMEC MPRA")) + 
+    labs(x = "Allele", y = "MPRA activity") +
+  stat_pvalue_manual(stat.test.hmpra, label = "p.signif", tip.length = 0,
+                        vjust = 0.6)
+
+ggsave(here("images/figure_panels/rs58821592_hmec_mpra_plot.pdf"),
+         h,
+         width = figwidth, height = figheight, units = "mm")
+
+
+airway_counts <- counts_norm %>%
+  dplyr::select(locus, Causal_SNP, Allele, barcode, airway_1, airway_2, airway_3) %>%
+  pivot_longer(cols = c("airway_1", "airway_2", "airway_3"), 
+               names_to = "replicate", values_to = "Activity")
+a <- ggplot(dplyr::filter(airway_counts, Causal_SNP == snp), 
+              aes(x = as.factor(Allele), y=Activity)) + 
+  geom_boxplot(outlier.size = 0.1, linewidth = 0.3) +
+    theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 6, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 6),
+        line=element_line(linewidth=0.2)) +
+  ylim(0, 2) +
+  ggtitle(paste0(snp, "\nAirway MPRA")) + 
+    labs(x = "Allele", y = "MPRA activity")
+ggsave(here("images/figure_panels/rs58821592_airway_mpra_plot.pdf"),
+         a,
+         width = figwidth, height = figheight, units = "mm")
+
+hl <- ggplot(dplyr::filter(brca_luc_long, SNP == snp), 
+              aes(x = as.factor(Allele), y=luc_vals)) + 
+  geom_boxplot(outlier.shape = NA, linewidth = 0.3) +
+  geom_jitter(width = 0.2, size = 0.1) + theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 6, hjust = 0.8),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 6),
+        line=element_line(linewidth=0.2)) +
+  ggtitle(paste0(snp, "\nluciferase in MCF7")) + 
+    labs(x = "Allele", y = "Luciferase activity") + 
+  ylim(0, 1.5) +
+    stat_compare_means(method = "t.test", comparison = comparisons, label = "p.signif",
+                       tip.length = 0.01, vjust = 0, size = 2)
+  
+  ggsave(here("images/figure_panels/rs58821592_luciferase_plot.pdf"),
+         hl,
+         width = figwidth, height = figheight, units = "mm")
+
+```
+
+Colon luciferase data
+```{r}
+colon_luc <- read_tsv(here("data/colon_luciferase_data.txt"))
+colon_luc_long <- colon_luc %>% pivot_longer(cols = c(rep1, rep2, rep3, rep4, rep5), names_to = "rep",
+                                             values_to = "luc_vals")
+colon_luc_long <- colon_luc_long %>%
+  mutate(Allele = ifelse(allele == "ref", "Ref", "Alt"))
+comparisons <- list(c("Alt", "Ref"))
+
+for (snp in colon_luc$SNP){
+  df <- dplyr::filter(colon_luc_long, SNP == snp)
+  df_max <- max(df$luc_vals[!is.nan(df$luc_vals)])
+  p <- ggplot(df, 
+              aes(x = as.factor(Allele), y=luc_vals)) + 
+    geom_boxplot(outlier.shape = NA, linewidth = l_width,
+                 outlier.size = o_size, outlier.stroke = o_stroke) +
+  geom_jitter(width = 0.2, size = o_size, stroke = o_stroke) + theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 5, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5),
+        line=element_line(linewidth=0.2)) +
+  ggtitle(paste0(snp, " luciferase activity")) + 
+    labs(x = "Allele", y = "Luciferase activity") + 
+    stat_compare_means(method = "t.test", comparison = comparisons, label = "p.signif",
+                       tip.length = 0.01, vjust = v_just, size = p_size,
+                       label.y = df_max + 0.1*df_max) +
+        ylim(c(0, df_max + 0.3*df_max))
+  
+  ggsave(here(paste0("images/possible_supplementary_panels/luciferase_plots/colon/",
+                     snp, "_luc.pdf")),
+         p,
+         width = fig_width, height = fig_height, units = "mm")
+}
+
+```
+
+Colon MPRA plots
+```{r}
+colon_counts <- counts_norm %>%
+  dplyr::select(locus, Causal_SNP, Allele, barcode, colon_1, colon_2, colon_3) %>%
+  pivot_longer(cols = c("colon_1", "colon_2", "colon_3"), 
+               names_to = "replicate", values_to = "Activity")
+
+for (snp in colon_luc$SNP){
+  df <- dplyr::filter(colon_counts, Causal_SNP == snp)
+  df_max <- max(df$Activity[!is.nan(df$Activity)])
+  mpra_pval <- data.frame(
+    group1 = "Alt",
+    group2 = "Ref",
+    p = res_merge$colon_fdr[res_merge$Causal_SNP == snp],
+    y.position = df_max + 0.1*df_max,
+    xmin = 1,
+    xmax = 2)
+  mpra_pval <- mpra_pval %>%
+    add_significance()
+  p <- ggplot(dplyr::filter(colon_counts, Causal_SNP == snp), 
+              aes(x = as.factor(Allele), y=Activity)) + 
+    geom_boxplot(linewidth = l_width,  outlier.size = o_size, 
+                 outlier.stroke = o_stroke) +
+    theme_minimal() +
+  theme(text = element_text(size = 5),
+        plot.title = element_text(size = 5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5)) +
+  ggtitle(paste0(snp, " MPRA activity")) + 
+    labs(x = "Allele", y = "MPRA activity") + 
+    stat_pvalue_manual(mpra_pval, label = "p.signif", tip.length = 0,
+                        vjust = v_just, size = p_size) +
+        ylim(c(0, df_max + 0.3*df_max))
+
+  ggsave(here(paste0("images/possible_supplementary_panels/mpra_single_snp_plots/colon/",
+                     snp, "_mpra.pdf")),
+         p,
+         width = fig_width, height = fig_height, units = "mm")
+}
+```
+
+Make the rs10411210 panels
+```{r eval=FALSE, include=FALSE}
+rs1_figwidth = 30
+rs1_figheight = 45
+snp = "rs10411210"
+
+rs1_df <- dplyr::filter(colon_counts, Causal_SNP == snp)
+rs1_df <- rs1_df %>% mutate(Allele = ifelse(Allele == "Alt", "T (Protective)",
+                                 "C (Risk)"))
+rs1_df$Allele <- factor(rs1_df$Allele, levels = c("C (Risk)", "T (Protective)"),
+                        ordered = T)
+
+
+stat.test.rs1colon <- data.frame(
+  group1 = "Alt",
+  group2 = "Ref",
+  p = res_merge$colon_fdr[res_merge$Causal_SNP == snp],
+  y.position = 1.7,
+  xmin = 1,
+  xmax = 2)
+
+stat.test.rs1colon <- stat.test.rs1colon %>%
+  add_significance()
+
+
+# make the MPRA plot
+r1_m <- ggplot(rs1_df, 
+              aes(x = as.factor(Allele), y=Activity)) + 
+  geom_boxplot(outlier.size = o_size, 
+                 outlier.stroke = o_stroke,
+               linewidth = l_width) +
+    theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 6, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5),
+        line=element_line(linewidth=0.2)) +
+  ggtitle(paste0(snp, "\nColon MPRA")) + 
+    labs(x = "Allele", y = "MPRA activity") +
+    stat_pvalue_manual(stat.test.rs1colon, label = "p.signif", tip.length = 0,
+                        vjust = 0.4, size = 2) +
+  ylim(c(0, max(rs1_df$Activity)*1.1))
+r1_m
+ggsave(here("images/figure_panels/rs10411210_colon_mpra_plot.pdf"),
+         r1_m,
+         width = rs1_figwidth, height = rs1_figheight, units = "mm")
+
+rs1_luc_df <- dplyr::filter(colon_luc_long, SNP == snp)
+rs1_luc_df <- rs1_luc_df %>% mutate(Allele = ifelse(allele == "alt", "T (Protective)",
+                                 "C (Risk)"))
+rs1_luc_df$Allele <- factor(rs1_luc_df$Allele, levels = c("C (Risk)", 
+                                                          "T (Protective)"),
+                        ordered = T)
+allele_comp = list(c("C (Risk)", "T (Protective)"))
+
+r1_l <- ggplot(rs1_luc_df, 
+              aes(x = Allele, y=luc_vals)) + 
+  geom_boxplot(outlier.size = o_size, 
+                 outlier.stroke = o_stroke,
+               linewidth = l_width) +
+    theme_minimal() +
+  theme(text = element_text(size = 5, family = "Helvetica"),
+        plot.title = element_text(size = 6, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1, vjust = 1, angle = 45, size = 5),
+        line=element_line(linewidth=0.2)) +
+  ggtitle(paste0(snp, "\nluciferase in HCT116")) + 
+    labs(x = "Allele", y = "Luciferase activity") + 
+    stat_compare_means(method = "t.test", comparison = allele_comp, label = "p.signif",
+                       tip.length = 0.0, vjust = .4, size = 2) +
+  ylim(c(0, max(rs1_luc_df$luc_vals) * 1.1))
+r1_l
+  
+  ggsave(here("images/figure_panels/rs10411210_HCT116_luciferase_plot.pdf"),
+         r1_l,
+         width = rs1_figwidth, height = rs1_figheight, units = "mm")
+
+```

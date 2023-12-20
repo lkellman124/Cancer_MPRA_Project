@@ -1,0 +1,65 @@
+ptgene	mpra_cancer	SNP	lead_SNP	cosmic_tier	cosmic_somatic	cosmic_germline	cosmic_role_in_cancer	cosmic_tumor_somatic	cosmic_tumor_germline	OMIM_phenotype
+AFF4	BRCA	rs58821592	rs6596100	1	yes	NA	oncogene, fusion	ALL	NA	NA
+AKAP9	BRCA	rs4727266	rs6964587	2	yes	NA	fusion	papillary thyroid	NA	NA
+AKT1	LUAD	rs115466370	rs116039120	1	yes	NA	oncogene	breast, colorectal, ovarian, NSCLC	NA	Cowden syndrome 6, 615109 (3)
+ALDH2	COAD,UCEC	rs7137828	rs3184504	2	yes	NA	fusion	leiomyoma	NA	NA
+BCL9L	GBM	rs5795129	rs12803321	1	yes	NA	oncogene, TSG	colorectal cancer, endometrial carcinoma, gastric cancer	NA	NA
+BUB1B	UCEC	rs9919974	rs937213	1	NA	yes	TSG	NA	rhabdomyosarcoma	NA
+CASP8	KC	rs2349075	rs13014235	1	yes	NA	TSG	hepatocellular, oral squamous cell, breast	NA	{Breast cancer, protection against}, 114480 (3),{Lung cancer, protection against}, 211980 (3)
+CCND1	BRCA,SKCM	rs34507830,rs868006	rs34507830,rs498136	1	yes	NA	oncogene, fusion	CLL, B-ALL, breast	NA	{von Hippel-Lindau syndrome, modifier of}, 193300 (3)
+CCNE1	BRCA	rs2161516	rs113701136,rs8102137	1	yes	NA	oncogene	serous ovarian	NA	NA
+CDH1	COAD,SKCM	rs11865026,rs34732502,rs9929239	rs35158985,rs9929218	1	yes	yes	TSG	lobular breast, gastric	gastric	Diffuse gastric and lobular breast cancer syndrome with or without cleft lip and/or palate, 137215 (3)
+CDKN2A	SKCM	rs72691562	rs201131773	1	yes	yes	TSG	melanoma, multiple other tumour types	melanoma, pancreatic	{Melanoma and neural system tumor syndrome}, 155755 (3),{Melanoma-pancreatic cancer syndrome}, 606719 (3),{Melanoma, cutaneous malignant, 2}, 155601 (3)
+CEP89	COAD	rs10411210	rs10411210	2	yes	NA	fusion	Spitzoid tumour	NA	NA
+CHEK2	ESCA	rs6005840	rs4822983	1	NA	yes	TSG	NA	breast	Tumor predisposition syndrome 4, breast/prostate/colorectal, 609265 (3)
+COL1A1	BRCA	rs2075554	rs2075555	1	yes	NA	fusion	DFSP, aneurysmal bone cyst	NA	NA
+COL2A1	LUAD	rs3803184,rs60542319	rs6580649	1	yes	NA	fusion	chondrosarcoma, enchondroma	NA	NA
+CRTC1	BRCA	rs28572537,rs8107367	rs172032,rs4808801,rs7258465	1	yes	NA	oncogene, fusion	salivary gland mucoepidermoid	NA	Mucoepidermoid salivary gland carcinoma (3)
+DNAJB1	BRCA	rs12162265	rs2594714	1	yes	NA	fusion	fibrolamellar hepatocellular carcinoma	NA	NA
+EGFR	GBM	rs56242229	rs11979158	1	yes	yes	oncogene	glioma, NSCLC	NSCLC	Adenocarcinoma of lung, response to tyrosine kinase inhibitor in, 211980 (3),Nonsmall cell lung cancer, response to tyrosine kinase inhibitor in, 211980 (3)
+ELL	BRCA	rs28572537,rs8107367	rs172032,rs4808801,rs7258465	1	yes	NA	TSG, fusion	AL	NA	NA
+ERCC2	LUAD	rs1799790	rs13181	1	NA	yes	TSG	NA	skin basal cell, skin squamous cell, melanoma	Xeroderma pigmentosum, group D, 278730 (3)
+FANCA	KC,SKCM	rs34659644,rs76265950	rs1805007	1	NA	yes	TSG	NA	AML, leukaemia	Fanconi anemia, complementation group A, 227650 (3)
+FEN1	COAD	rs5792235	rs174537	2	NA	yes	TSG	NA	breast cancer	NA
+FGFR1OP	LUAD	rs1811123,rs2149090,rs2149092,rs2237277,rs2247315,rs2345571,rs239935	rs444210,rs6920364	1	yes	NA	fusion	MPN, NHL	NA	NA
+FGFR2	BRCA	rs11599804	rs1078806,rs2912780,rs2981579	1	yes	NA	oncogene, fusion	gastric, NSCLC, endometrial	NA	Saethre-Chotzen syndrome, 101400 (3)
+FOXE1	THCA	rs13295123,rs3758250,rs7851660	rs10122541,rs7037324,rs72753537	NA	NA	NA	NA	NA	NA	{Thyroid cancer, nonmedullary, 4}, 616534 (3)
+GPC5	LUAD	rs1847717	rs2352028	2	yes	NA	TSG	lung adenocarcinoma	NA	NA
+HEATR3	GBM	rs4389139,rs55646814,rs56113751	rs10852606	NA	NA	NA	NA	NA	NA	Diamond-Blackfan anemia 21, 620072 (3)
+HIST1H3B	BRCA,LUAD	rs41266779	rs13191445,rs13198474	1	yes	NA	oncogene	glioma	NA	NA
+HLA-A	BRCA,PRAD	rs2523397,rs3095327,rs3132645,rs9262142	rs2523395,rs3129984,rs3132610,rs3132615,rs9262142	1	yes	NA	fusion	Spitzoid tumour	NA	NA
+IRF1	BRCA	rs2706336,rs72797306	rs736801	NA	NA	NA	NA	NA	NA	Myelogenous leukemia, acute (3)
+KMT2A	GBM	rs5795129	rs12803321	1	yes	NA	oncogene, fusion	AML, ALL	NA	NA
+MC1R	KC,SKCM	rs34659644,rs76265950	rs1805007	NA	NA	NA	NA	NA	NA	{Melanoma, cutaneous malignant, 5}, 613099 (3)
+MDM4	BRCA,GBM	rs12039968,rs7556655	rs2290854,rs4252707	1	yes	NA	oncogene	glioblastoma, bladder, retinoblastoma	NA	NA
+MECOM	COAD,GBM,THCA	rs3950296	rs10936599,rs3772190,rs6793295	1	yes	NA	oncogene, fusion	AML, CML, MDS	NA	NA
+MRTFA	BRCA	rs113617367	rs6001930	1	yes	NA	oncogene, TSG, fusion	acute megakaryocytic leukaemia	NA	NA
+MUC1	ESCA	rs2974929	rs4072037	1	yes	NA	fusion	B-NHL	NA	NA
+MUTYH	BRCA	rs946525	rs12077974	1	NA	yes	TSG	NA	colorectal	NA
+MYC	OVCA,PAAD,UCEC	rs6651253,rs75370373	rs10088218,rs1561927,rs17232730	1	yes	NA	oncogene, fusion	Burkitt lymphoma, amplified in other cancers, B-CLL	NA	NA
+NCOA1	LUAD	rs3731629,rs79682290	rs2083389	1	yes	NA	fusion	alveolar rhabdomyosarcoma	NA	NA
+NCOA4	PRAD	rs11004409,rs11004584,rs11005089	rs10763567,rs3123078	1	yes	NA	TSG, fusion	papillary thyroid	NA	NA
+NDUFA13	BRCA	rs1000237	rs2304098,rs2965183	NA	NA	NA	NA	NA	NA	{Thyroid carcinoma, Hurthle cell}, 607464 (3)
+NPC1	OVCA	rs2155841	rs8098244	NA	NA	NA	NA	NA	NA	{Nasopharyngeal carcinoma 1} (2)
+NR4A3	LUAD	rs191205566	rs191205566	1	yes	NA	oncogene, fusion	extraskeletal myxoid chondrosarcoma	NA	NA
+NRG1	THCA	rs36213229	rs2439302	1	yes	NA	TSG, fusion	NSCLC	NA	NA
+PAFAH1B2	BRCA	rs12419178,rs2186844	rs77683187	1	yes	NA	fusion	MLCLS	NA	NA
+PCBP1	COAD,UCEC	rs2278934,rs3755391,rs6714919	rs4853036	2	yes	NA	NA	CRC	NA	NA
+PIK3R1	BRCA	rs625637	rs184886	1	yes	NA	TSG	glioblastoma, ovarian, colorectal	NA	NA
+POU5F1	BRCA,LUAD	rs3095311,rs3095327,rs3101018,rs3130476,rs3132645,rs7765136,rs9262142	rs3094222,rs3117582,rs3129984,rs3131378,rs3132610,rs3132615,rs501942,rs622076,rs9262142	1	yes	NA	oncogene, fusion	sarcoma	NA	NA
+PPP1CB	BRCA	rs6721781	rs4577244,rs67073037	NA	NA	NA	NA	NA	NA	Noonan syndrome-like disorder with loose anagen hair 2, 617506 (3)
+PRKACA	BRCA	rs12162265	rs2594714	1	yes	NA	oncogene	fibrolamellar hepatocellular carcinoma, cortisol secreting adrenal adenoma	NA	NA
+RAD51B	PRAD	rs17756782	rs7141529	1	yes	NA	TSG, fusion	lipoma, uterine leiomyoma	NA	NA
+RBBP8	BRCA	rs1031651	rs12962334	NA	NA	NA	NA	NA	NA	Seckel syndrome 2, 606744 (3)
+RIT1	ESCA	rs2974929	rs4072037	NA	NA	NA	NA	NA	NA	Noonan syndrome 8, 615355 (3)
+RNASEL	COAD	rs6658501	rs10752881	NA	NA	NA	NA	NA	NA	Prostate cancer 1, 601518 (3)
+RPL27	COAD,UCEC	rs2271730	rs9901225	NA	NA	NA	NA	NA	NA	?Diamond-Blackfan anemia 16, 617408 (3)
+RPN1	PRAD	rs2811476,rs6439121	rs10934853	1	yes	NA	fusion	AML	NA	NA
+SH2B3	COAD,UCEC	rs7137828	rs3184504	1	yes	NA	TSG	MPN, sAML, erythrocytosis, B-ALL	NA	NA
+SIX1	PRAD	rs7156375	rs7153648	1	yes	NA	oncogene	Wilms tumour	NA	NA
+SMAD3	BRCA,THCA	rs148800236,rs17293632	rs151090251,rs56062135	1	yes	NA	TSG	colorectal carcinoma, oral squamous cell carcinoma	NA	NA
+STAT3	COAD,UCEC	rs12449341,rs2271730,rs2279844,rs3817331,rs4375714,rs4793005,rs8075910,rs9889373	rs9901225	1	yes	yes	oncogene	T-cell large granular lymphocytic leukaemia	paediatric large granular lymphocytic leukaemia	NA
+TCF7L2	BRCA	rs6585201	rs10885405,rs7904519	1	yes	NA	oncogene, fusion	colorectal	NA	NA
+TFPT	LUAD	rs113758548	rs12981718	2	yes	NA	fusion	pre-B ALL	NA	NA
+TRIM27	BRCA,LUAD	rs35353359	rs13201681,rs13213986,rs13214023,rs34119086,rs34661125	1	yes	NA	oncogene, fusion	papillary thyroid	NA	NA
+XPA	THCA	rs10983893,rs12343182,rs13295123,rs55978521,rs7851660	rs10122541,rs7037324,rs72753537	1	NA	yes	TSG	NA	skin basal cell, skin squamous cell, melanoma	Xeroderma pigmentosum, group A, 278700 (3)

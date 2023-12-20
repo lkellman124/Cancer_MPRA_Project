@@ -1,0 +1,15 @@
+celltype	full_name	display_name	color	cancer
+airway	airway	Airway	purple4	LUAD
+ast	astrocyte	Astrocyte	deepskyblue1	GBM
+colon	colon	Colon	pink	COAD
+endo	endometrial	Endometrial	mediumpurple1	UCEC
+eso	esophagus	Esophageal	darkgoldenrod1	ESCA
+hmec	HMEC	HMEC	firebrick1	BRCA
+kc	keratinocyte	KC	turquoise2	KC
+lx	293T	293T		
+mc	melanocyte	MC	tomato1	SKCM
+ov	ovarian	Ovarian	turquoise4	OVCA
+panc	pancreatic	Pancreatic	sienna1	PAAD
+pros	prostate	Prostate	royalblue1	PRAD
+renal	renal	Renal	cadetblue1	KIRC
+thy	thyroid	Thyroid	yellow	THCA

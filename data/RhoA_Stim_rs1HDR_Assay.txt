@@ -1,0 +1,20 @@
+"Data from Ron Shanderson, RhoA activity assay on rs10411210 HDR edited cells with and without RhoA stimulation"				
+Replicate	Activity	Condition	Allele	Stimulation
+1	14.3	T - Vehicle	T	Vehicle
+2	5.78	T - Vehicle	T	Vehicle
+3	14.5	T - Vehicle	T	Vehicle
+4	9.25	T - Vehicle	T	Vehicle
+1	12.2	T - Stim	T	Stim
+2	15.6	T - Stim	T	Stim
+3	7	T - Stim	T	Stim
+4	17.1	T - Stim	T	Stim
+1	11.7	C - Vehicle	C	Vehicle
+2	11.2	C - Vehicle	C	Vehicle
+3	35.4	C - Vehicle	C	Vehicle
+4	28.1	C - Vehicle	C	Vehicle
+5	13.5	C - Vehicle	C	Vehicle
+1	17.8	C - Stim	C	Stim
+2	27.4	C - Stim	C	Stim
+3	57.6	C - Stim	C	Stim
+4	56.2	C - Stim	C	Stim
+5	27.3	C - Stim	C	Stim

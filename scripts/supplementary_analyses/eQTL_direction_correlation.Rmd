@@ -1,0 +1,164 @@
+---
+title: "Check correlations between eQTL direction and MPRA logFC"
+output: html_document
+date: "2023-07-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+Assess MPRA concordance with GTEx and eQTLgen eQTLs
+- Read in res_merge
+- Read in full_gtex_egene_table.tsv
+
+Determine direction concordance, magnitude correlation
+
+Start with GTEx
+- Flip slope direction where necessary - indicated in allele_match
+- Group by SNP, annotate with GTEx up, down or mixed
+
+```{r}
+gtex <- read_tsv(here("output/full_gtex_egene_table.tsv"))
+res_merge <- read_tsv(here("output/res_merge_withhitannot_20230627.tsv"))
+res_merge <- dplyr::filter(res_merge, !is.na(disease))
+```
+GTEx entries still have multiple diseases
+They're unique on locus, snp, gene, tissue
+Convert tissues to res_merge names
+
+```{r}
+# try removing weaker associations
+# gtex <- dplyr::filter(gtex, pval_nominal < quantile(gtex$pval_nominal)[3])
+
+# gtex is flipped in what allele it considers first (basically doing alt/ref)
+# use rs10411210 to check
+# so flip the slope if alleles match, don't flip if they're flipped
+gtex_flip <- gtex %>% 
+  mutate(flipped_slope = ifelse(gtex_allele_match == "flipped",
+                                slope, -slope))
+gtex_flip <- gtex_flip %>%
+  dplyr::select(-lead_snp, -shared_with_lead_snp) %>%
+  distinct()
+  
+gtex_flip <- gtex_flip %>% rowwise() %>%
+  mutate(convert_tissue = case_when(
+    grepl("Lung", gtex_tissue) ~ "airway",
+    grepl("Breast", gtex_tissue) ~ "hmec",
+    grepl("Prostate", gtex_tissue) ~ "pros",
+    grepl("Skin", gtex_tissue) ~ "kc,mc",
+    grepl("Ovary", gtex_tissue) ~ "ov",
+    grepl("Colon", gtex_tissue) ~ "colon",
+    grepl("Pancreas", gtex_tissue) ~ "panc",
+    grepl("Kidney", gtex_tissue) ~ "renal",
+    grepl("Thyroid", gtex_tissue) ~ "thy",
+    grepl("Esopha", gtex_tissue) ~ "eso",
+    grepl("Brain", gtex_tissue) ~ "ast",
+    grepl("Uterus", gtex_tissue) ~ "endo",
+    T ~ "none")) %>%
+  mutate(convert_tissue = str_split(convert_tissue, ",")) %>%
+  unnest(convert_tissue)
+
+```
+
+```{r}
+# make res_merge long
+res_long <- res_merge %>% 
+  dplyr::select(locus, c(Causal_SNP, disease, hit_spec, hit_any_celltype, 
+                ends_with("logFC"), ends_with("fdr"))) %>%  
+  pivot_longer(cols = c(-locus, -Causal_SNP, -disease, -hit_spec, -hit_any_celltype),
+               names_to = "cell_measure", values_to = "value") %>%
+  separate(col = cell_measure, into = c("celltype", "value_type"), sep = "_") %>%
+  pivot_wider(names_from = value_type, values_from = value) %>%
+  mutate(mpra_log_p = -log10(fdr))
+
+res_gtex <- inner_join(res_long, dplyr::select(gtex_flip, -disease),
+                      by = c("locus", "Causal_SNP", "celltype" = "convert_tissue"))
+```
+
+Check matching rates
+They don't match better than chance
+```{r}
+# give a -1 if all gtex slopes are negative, 1 if all positive, 0 if no match
+res_gtex_snp_grp <- res_gtex %>% group_by(locus, Causal_SNP, celltype) %>%
+  summarise(disease = unique(disease),
+            hit_spec = unique(hit_spec),
+            hit_any_celltype = unique(hit_any_celltype),
+            logFC = unique(logFC),
+            gtex_dir = case_when(
+              sum(flipped_slope < 0) == length(flipped_slope) ~ -1,
+              sum(flipped_slope > 0) == length(flipped_slope) ~ 1,
+              T ~ 0))
+# match gtex slopes to logFCs              
+res_gtex_snp_grp <- res_gtex_snp_grp %>%
+  mutate(dir_match = case_when(
+    gtex_dir == -1 & logFC < 0 ~ "match",
+    gtex_dir == 1 & logFC > 0 ~ "match",
+    gtex_dir == 0  ~ "mixed",
+    T ~ "no_match"))
+
+# Check how many matches/mismatches
+table(res_gtex_snp_grp$dir_match)/length(res_gtex_snp_grp$dir_match)
+# for all, (ie, group on snp, celltype (for mpra measurement and gtex))
+# match: 27.71%
+# mixed: 45.17%
+# mismatch: 27.13%
+
+```
+
+Check correlations
+1. All to all
+2. Limit to hits in GTEx cell type
+3. Limit to daSNVs
+4. Limit to top third of GTEx associations
+5. Limit to single gene associations
+Plot them as a bar graph
+Plot the last correlation as a scatterplot
+
+
+```{r}
+cor_all <- cor.test(res_gtex$logFC, res_gtex$flipped_slope)
+
+res_gtex_cellmatch <- res_gtex %>%
+  mutate(hit_any_celltype = str_split(hit_any_celltype, ",")) %>%
+  unnest(hit_any_celltype) %>%
+  dplyr::filter(hit_any_celltype == celltype)
+  
+cor_cellmatch <- cor.test(res_gtex_cellmatch$logFC,
+                          res_gtex_cellmatch$flipped_slope)
+
+res_gtex_dasnv <- res_gtex %>%
+  dplyr::filter(!is.na(hit_spec)) %>%
+  mutate(hit_spec = str_split(hit_spec, ",")) %>%
+  unnest(hit_spec) %>%
+  dplyr::filter(hit_spec == celltype)
+
+cor_dasnv <- cor.test(res_gtex_dasnv$logFC,
+                          res_gtex_dasnv$flipped_slope)
+
+cutoff <- quantile(gtex$pval_nominal, c(0, 0.3333, 0.6667, 1))[3]
+
+res_gtex_dasnv_more_certain <- res_gtex_dasnv %>%
+  dplyr::filter(pval_nominal < cutoff)
+cor_dasnv_more_certain <- cor.test(res_gtex_dasnv_more_certain$logFC,
+                          res_gtex_dasnv_more_certain$flipped_slope)
+
+
+cor_plot_df <- data.frame(condition = factor(c("all", "match_cell_types",
+                                        "daSNV", "daSNV_high_prob_eqtl"),
+                                        levels = c("all", "match_cell_types",
+                                        "daSNV", "daSNV_high_prob_eqtl"),
+                                        ordered = T),
+                          cor_val = c(cor_all$estimate,
+                                      cor_cellmatch$estimate,
+                                      cor_dasnv$estimate,
+                                      cor_dasnv_more_certain$estimate))
+cor_plot <- ggplot(cor_plot_df, aes(x = condition, y = cor_val)) +
+  geom_bar(stat = "identity") + 
+  theme_minimal()
+ggsave(here("images/possible_supplementary_panels/eqtl_direction_correlation_comparison.pdf"), 
+       plot = cor_plot, width = 90, height = 50, units = 'mm')
+```
+

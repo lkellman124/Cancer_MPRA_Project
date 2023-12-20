@@ -1,0 +1,121 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+```
+
+```{r}
+TIMEOUT <- 300
+```
+
+Get linkage information between GWAS cancer linked lead SNPs and putative causal SNPs in the library
+This is not the generation of the library, this is me checking/ordering the associations
+For library creation, see https://github.com/zhaozhangyangzi/MPRA_SNP_List
+Ran this around 12/19/20, haploR v4.0.2
+This is not YZ's initial expansion run and DHS filtering - recreating to check linkages, cancer associations
+```{r}
+lib <- read_tsv(here("output/lib_table_merged_rsids.tsv"))
+snplist <- unique(c(lib$Causal_SNP, lib$leadSNP))
+```
+
+European haploreg data
+```{r}
+library(haploR)
+haplo_data_eur <- data.frame()
+lead_snps <- unique(lib$leadSNP)
+for (i in 0:12){
+  haplo_bit <-  queryHaploreg(query = lead_snps[(i*100):min(i*100+99, length(lead_snps))], 
+                              file = NULL, study = NULL, ldThresh = 0.8, ldPop = "EUR", 
+                              epi = "acetyl", cons = "siphy", genetypes = "refseq", 
+                              url = "https://pubs.broadinstitute.org/mammals/haploreg/haploreg.php",
+                              timeout = TIMEOUT, encoding = "UTF-8", verbose = FALSE)
+  haplo_data_eur <- rbind(haplo_data_eur, haplo_bit)
+}
+
+```
+
+
+African haploreg data
+```{r}
+haplo_data_afr <- data.frame()
+lead_snps <- unique(lib$leadSNP)
+for (i in 0:12){
+  haplo_bit <-  queryHaploreg(query = lead_snps[(i*100):min(i*100+99, length(lead_snps))], 
+                              file = NULL, study = NULL, ldThresh = 0.8, ldPop = "AFR", 
+                              epi = "acetyl", cons = "siphy", genetypes = "refseq", 
+                              url = "https://pubs.broadinstitute.org/mammals/haploreg/haploreg.php",
+                              timeout = TIMEOUT, encoding = "UTF-8", verbose = FALSE)
+  haplo_data_afr <- rbind(haplo_data_afr, haplo_bit)
+}
+
+```
+
+American haploreg data
+```{r}
+haplo_data_amr <- data.frame()
+lead_snps <- unique(lib$leadSNP)
+for (i in 0:12){
+  haplo_bit <-  queryHaploreg(query = lead_snps[(i*100):min(i*100+99, length(lead_snps))], 
+                              file = NULL, study = NULL, ldThresh = 0.8, ldPop = "AMR", 
+                              epi = "acetyl", cons = "siphy", genetypes = "refseq", 
+                              url = "https://pubs.broadinstitute.org/mammals/haploreg/haploreg.php",
+                              timeout = TIMEOUT, encoding = "UTF-8", verbose = FALSE)
+  haplo_data_amr  <- rbind(haplo_data_amr, haplo_bit)
+}
+
+```
+
+Asian haploreg data
+```{r}
+haplo_data_asn <- data.frame()
+for (i in 0:12){
+  haplo_bit <-  queryHaploreg(query = lead_snps[(i*100):min(i*100+99, length(lead_snps))], 
+                              file = NULL, study = NULL, ldThresh = 0.8, ldPop = "ASN", 
+                              epi = "acetyl", cons = "siphy", genetypes = "refseq", 
+                              url = "https://pubs.broadinstitute.org/mammals/haploreg/haploreg.php",
+                              timeout = TIMEOUT * 4, encoding = "UTF-8", verbose = FALSE)
+  haplo_data_asn  <- rbind(haplo_data_asn, haplo_bit)
+}
+
+
+```
+
+
+merge populations
+```{r}
+haplo_data <- rbind(haplo_data_eur, haplo_data_amr, haplo_data_asn, haplo_data_afr)
+haplo_data_test <- haplo_data %>% dplyr::filter(rsID %in% c(lib$Causal_SNP, lib$leadSNP))
+
+haplo_data <- dplyr::select(haplo_data, -r2, -`D'`)
+haplo_data <- distinct(haplo_data)
+# write_tsv(haplo_data, here("output/cmpra_haploreg_data_withquery.tsv"))
+haplo_data <- read_tsv(here("output/cmpra_haploreg_data_withquery.tsv"))
+
+```
+
+```{r}
+snps_expanded <- dplyr::select(haplo_data, rsID, query_snp_rsid) %>% distinct() %>%
+  dplyr::filter(rsID %in% lib$Causal_SNP) 
+lead_diseases <- dplyr::select(lib, leadSNP, Tissue) %>% mutate(Tissue = tolower(Tissue))
+lead_diseases <- lead_diseases %>% mutate(leadSNP = str_split(leadSNP, ",")) %>%
+  unnest(leadSNP)
+lead_diseases <- lead_diseases %>% mutate(Tissue = str_split(Tissue, ",")) %>%
+  unnest(Tissue)
+snps_expanded <- left_join(snps_expanded,lead_diseases, by=c("query_snp_rsid" = "leadSNP"))
+snps_expanded <- snps_expanded %>% group_by(rsID) %>%
+  summarise(Lead_SNP_expanded = paste(sort(unique(query_snp_rsid)), collapse=","),
+            disease_expanded = paste(sort(unique(Tissue)), collapse=","))
+sum(snps_expanded$rsID %in% lib$Causal_SNP)
+
+
+lib_exp <- left_join(lib, snps_expanded, by=c("Causal_SNP" = "rsID"))
+
+
+write_tsv(lib_exp, here("output/cancer_lib_haploreg_diseasereannotated.tsv"))
+```
+

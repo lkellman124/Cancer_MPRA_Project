@@ -1,0 +1,12 @@
+gene	type
+CIRH1A	colon_egene
+CSE1L	colon_egene
+GAPDH	colon_egene
+RPS21	colon_egene
+SNRNP27	colon_egene
+TMEM258	colon_egene
+TUBG1	colon_egene
+ACTB	added_control
+PGK1	added_control
+RPLP0	added_control
+TFRC	added_control

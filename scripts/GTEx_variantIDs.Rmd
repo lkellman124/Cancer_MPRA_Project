@@ -1,0 +1,82 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(magrittr)
+library(dplyr)
+library(here)
+library(tidyverse)
+```
+
+Identify GTEx variant ID corresponding to each SNP in the library
+```{r}
+lib <- read_tsv(here("output/res_merge_gwas_bg.tsv"))
+
+gtex_lookup <- read_tsv(here("data/GTEx_Analysis_2017-06-05_v8_WholeGenomeSeq_838Indiv_Analysis_Freeze.lookup_table.txt.gz"))
+ 
+
+```
+Make a table of lead SNP variantIDs
+```{r}
+lead_snps = lib %>% dplyr::select(lead_snp) %>%
+  mutate(leadSNP = str_split(lead_snp, ",|;")) %>%
+  unnest(cols = "leadSNP") %>%
+  distinct()
+lead_snps <- left_join(lead_snps, dplyr::select(gtex_lookup,
+                                                rs_id_dbSNP151_GRCh38p7,
+                                                variant_id_b37,
+                                                variant_id),
+                       by = c("leadSNP" = "rs_id_dbSNP151_GRCh38p7"))
+lead_snps <- dplyr::filter(lead_snps, !is.na(lead_snp))                      
+
+```
+
+```{r}
+write_tsv(lead_snps, here("output/lead_snps_gtex_variant_ids.tsv"))
+```
+
+Merge variant IDs into the main lib
+Remove the ones where alleles mismatch
+```{r}
+rc <- function(x) {
+  return(case_when(
+    x == "A" ~ "T",
+    x == "T" ~ "A",
+    x == "C" ~ "G",
+    x == "G" ~ "C",
+    T ~ "PROBLEM"))}
+
+
+pc_snps <- lib %>% dplyr::select(locus, Causal_SNP, Ref, Alt, lead_snp, disease)
+lib_gtex <- left_join(pc_snps, dplyr::select(gtex_lookup,ref, alt,
+                                         rs_id_dbSNP151_GRCh38p7,
+                                         variant_id_b37,
+                                         variant_id, 
+                                         num_alt_per_site),
+                      by = c("Causal_SNP" = "rs_id_dbSNP151_GRCh38p7"))
+lib_gtex <- lib_gtex %>%
+  dplyr::filter(!is.na(ref)) %>%
+  mutate(gtex_allele_match = case_when(
+    Ref == ref & Alt == alt ~ "match",
+    Ref == "-" & Alt == str_remove(alt, "^[A-Z]") ~ "match",
+    Alt == "-" & Ref == str_remove(ref, "^[A-Z]") ~ "match",
+    Ref == alt & Alt == ref ~ "flipped",
+    Ref == rc(ref) & Alt == rc(alt) ~ "rc",
+  #  Ref == rc(alt) & Alt == rc(ref) ~ "rc_flipped",
+  # No reverse complement flipped - not sure why 
+  # (but flipped is pretty rare, rc is pretty rare)
+    T ~ "mismatch"
+  ))
+
+lib_gtex <- dplyr::filter(lib_gtex, !gtex_allele_match == "mismatch")
+         
+```
+
+```{r}
+write_tsv(lib_gtex, here("output/putative_causal_snps_gtex_variant_ids.tsv"))
+```
+

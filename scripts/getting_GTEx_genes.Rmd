@@ -1,0 +1,210 @@
+---
+title: "Find GTEx eGenes"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(biomaRt)
+library(here)
+```
+
+
+Getting GTEx eGenes for MPRA library SNPs
+Using GTEx v8
+From https://gtexportal.org/home/datasets, use GTEx_Analysis_v8_eQTL.tar
+
+```{r}
+
+# lib <- read_tsv(here("output/lib_studies_idmerge_diseasesexpanded_coords3738_gtexIDuncollapsed_1.9.20.tsv"))
+res_merge <- read_tsv(here("output/res_merge_gwas_bg.tsv"))
+pc_snp_gtex_ids <- read_tsv(here("output/putative_causal_snps_gtex_variant_ids.tsv"))
+lead_snp_gtex_ids <- read_tsv(here("output/lead_snps_gtex_variant_ids.tsv"))
+
+variant_ids <- unique(c(pc_snp_gtex_ids$variant_id,
+                        lead_snp_gtex_ids$variant_id))
+
+
+```
+Find all the significant SNP-egene pairs in our tissues from gtex v8
+```{r}
+file_list <- list.files(path=here("data/LK_GTEx_Analysis_v8_eQTL/"),
+                        pattern = ".*signif_variant_gene_pairs.txt.gz$", full.names=T)
+files_filt <- file_list[grepl("Brain|Colon|Esop|Thyroid|Skin|Pancreas|Breast|Lung|Uterus|Kidney|Ovary|Prostate", file_list)]
+egene_pairs <- data.frame()
+for (file_name in files_filt){
+  tissue = str_remove(str_remove(file_name, "\\.v8.*$"), "^.*\\/")
+  df = read_tsv(file_name)
+  df_rel = filter(df, variant_id %in% variant_ids)
+  df_rel$tissue <- tissue
+  egene_pairs <- rbind(egene_pairs, df_rel)
+}
+
+write_tsv(egene_pairs, here("output/significant_egene_pairs_for_lead_and_pc_snps_in_gtex.txt"))
+
+# egene_pairs <- read_tsv( here("output/significant_egene_pairs_for_lead_and_pc_snps_in_gtex.txt"))
+
+```
+
+#### Convert to HGNC symbol
+```{r}
+# convert to hgnc symbol
+
+# settings
+features=c('ensembl_gene_id','ensembl_transcript_id','entrezgene_id','hgnc_symbol', 'external_gene_name','refseq_mrna')
+host='www.ensembl.org'
+# human
+hmart=useMart('ENSEMBL_MART_ENSEMBL', dataset='hsapiens_gene_ensembl',host=host)
+results=getBM(attributes=features,mart=hmart)
+
+# or skip to:
+# results = read_tsv('~/Documents/MPRA/Cancer_MPRA/Lx_Analysis/geneID_mapping_human.tsv')
+
+egene_med <- egene_pairs %>% mutate(gene_id = str_remove(gene_id, "\\.[0-9]+"))
+key = dplyr::select(results, ensembl_gene_id, hgnc_symbol) %>% dplyr::filter(ensembl_gene_id %in% egene_med$gene_id) %>%
+  distinct()
+
+egene_med <- egene_med %>% rowwise() %>% 
+  mutate(hgnc = ifelse(gene_id %in% key$ensembl_gene_id, key$hgnc_symbol[key$ensembl_gene_id == gene_id],
+                       NA))
+                                
+                              
+```
+Want a lead SNP table
+Want this filtered for main library SNPs (!is.na(disease))
+```{r}
+lead_egenes <- left_join(dplyr::select(lead_snp_gtex_ids,
+                                       lead_snp, variant_id),
+                         dplyr::select(egene_med, variant_id, hgnc,
+                                       pval_nominal, slope, tissue))
+
+leads_dis <-res_merge %>%
+  dplyr::filter(!is.na(disease)) %>%
+  mutate(lead_snp = str_split(lead_snp, ",")) %>%
+  unnest(lead_snp) %>%
+  dplyr::select(lead_snp, disease) %>%
+  distinct()
+  
+lead_genes_filt <- inner_join(lead_egenes, leads_dis)
+
+lead_genes_spec <- lead_genes_filt %>% rowwise() %>%
+  mutate(correct_tissue = case_when(
+    grepl("airway", disease) & grepl("Lung", tissue) ~ T,
+    grepl("hmec", disease) & grepl("Breast", tissue) ~ T,
+    grepl("pros", disease) & grepl("Prostate", tissue) ~ T,
+    grepl("kc", disease) & grepl("Skin", tissue) ~ T,
+    grepl("ov", disease) & grepl("Ovary", tissue) ~ T,
+    grepl("colon", disease) & grepl("Colon", tissue) ~ T,
+    grepl("panc", disease) & grepl("Pancreas", tissue) ~ T,
+    grepl("renal", disease) & grepl("Kidney", tissue) ~ T,
+    grepl("thy", disease) & grepl("Thyroid", tissue) ~ T,
+    grepl("mc", disease) & grepl("Skin", tissue) ~ T,
+    grepl("eso", disease) & grepl("Esopha", tissue) ~ T,
+    grepl("ast", disease) & grepl("Brain", tissue) ~ T,
+    grepl("endo", disease) & grepl("Uterus", tissue) ~ T,
+    T ~ F))
+
+lead_genes_spec <- lead_genes_spec %>%
+  dplyr::filter(correct_tissue)
+
+  
+write_tsv(lead_genes_filt, here("output/lead_snp_gtex_all_tissues.tsv"))
+write_tsv(lead_genes_spec, here("output/lead_snp_gtex_tissue_specific.tsv"))
+
+```
+Putative causal SNP tables
+```{r}
+# merge the egenes with the putative causal snps
+pcsnp_egenes <- left_join(dplyr::select(pc_snp_gtex_ids, -ref, -alt,
+                                        -variant_id_b37, -num_alt_per_site),
+                         dplyr::select(egene_med, variant_id, hgnc,
+                                       pval_nominal, slope, tissue))
+# make the lead annotations
+pcsnp_lead_merge <- pcsnp_egenes %>% 
+  dplyr::filter(!hgnc == "") %>%
+  mutate(lead_snp = str_split(lead_snp, ",|;")) %>%
+  unnest(cols = "lead_snp")
+lead_egenes$egene <- "yes"
+pcsnp_lead_merge <- left_join(pcsnp_lead_merge,
+                              dplyr::select(lead_egenes, lead_snp, hgnc, tissue, 
+                                            egene),
+                              by = c("lead_snp" = "lead_snp",
+                                     "hgnc" = "hgnc",
+                                     "tissue" = "tissue"))
+
+
+```
+
+
+```{r}
+gtex_all <- pcsnp_lead_merge %>%
+  dplyr::select(locus, hgnc, tissue) %>%
+  group_by(locus) %>%
+  summarise_all(function(x) paste(sort(unique(x)), collapse = ","))
+
+res_merge_add <- left_join(res_merge, rename(gtex_all, gtex_egene_all = hgnc, gtex_tissue_all = tissue))
+
+```
+
+
+```{r}
+# filter down to the egenes where the tissue matches
+gtex_spec_filt <- pcsnp_lead_merge %>% rowwise() %>%
+  mutate(correct_tissue = case_when(
+    grepl("airway", disease) & grepl("Lung", tissue) ~ T,
+    grepl("hmec", disease) & grepl("Breast", tissue) ~ T,
+    grepl("pros", disease) & grepl("Prostate", tissue) ~ T,
+    grepl("kc", disease) & grepl("Skin", tissue) ~ T,
+    grepl("ov", disease) & grepl("Ovary", tissue) ~ T,
+    grepl("colon", disease) & grepl("Colon", tissue) ~ T,
+    grepl("panc", disease) & grepl("Pancreas", tissue) ~ T,
+    grepl("renal", disease) & grepl("Kidney", tissue) ~ T,
+    grepl("thy", disease) & grepl("Thyroid", tissue) ~ T,
+    grepl("mc", disease) & grepl("Skin", tissue) ~ T,
+    grepl("eso", disease) & grepl("Esopha", tissue) ~ T,
+    grepl("ast", disease) & grepl("Brain", tissue) ~ T,
+    grepl("endo", disease) & grepl("Uterus", tissue) ~ T,
+    T ~ F))
+gtex_spec <- gtex_spec_filt %>%
+  dplyr::filter(correct_tissue) %>%
+  group_by(locus) %>%
+  summarise(gtex_egene_spec = paste(unique(hgnc), collapse=","),
+            gtex_tissue_spec = paste(unique(tissue), collapse = ","))
+  
+ # merge into res_merge 
+res_merge_add <- left_join(res_merge_add, gtex_spec)
+
+
+gtex_spec_lead <- gtex_spec_filt %>%
+  dplyr::filter(correct_tissue & egene == "yes") %>%
+  group_by(locus) %>%
+  summarise(gtex_spec_lead_shared = paste(unique(hgnc), collapse = ","),
+         gtex_tissue_spec_lead_shared = paste(unique(tissue), collapse = ","))
+  
+  
+res_merge_add <- left_join(res_merge_add, gtex_spec_lead)
+
+```
+
+
+Make the full table (keep pvals, directions, etc)
+Not flipping the alleles here
+```{r}
+pcsnp_lead_merge <- pcsnp_lead_merge %>% 
+  rename(gtex_egene = hgnc, gtex_tissue = tissue,
+         shared_with_lead_snp = egene)
+
+write_tsv(pcsnp_lead_merge, here("output/full_gtex_egene_table.tsv"))
+```
+
+
+```{r}
+
+write_tsv(res_merge_add, here("output/res_merge_gtex.tsv"))
+
+
+
+```
+
