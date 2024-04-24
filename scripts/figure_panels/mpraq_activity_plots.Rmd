@@ -12,21 +12,16 @@ library(gridExtra)
 library(here)
 ```
 
-Activity plots
-
-Reviewer said:
-"On page 5, it is stated that 7.2 to 24.8% of all sequences were found to be significantly active compared to negative controls, with a reference to Data S1. I recommend showing the number of positive sequences in a main figure, ideally separately for each cell type and for native sequences and cancer risk SNVs, and in comparison to the positive controls. Note that Fig. S2b is partly circular because they compare MPRA results for active and inactive sequences, classified using the same MPRA data (via p.mad cutoffs)."
+Activity plots - plot barplots of transcriptional activity for different groups of SNVs, and a summary of how many were active in each cell type.
 
 Want to show: number significantly active, separately for each cell types
 Possible groups:
 Motif
 Positive
 Scramble
-Closed chromatin in that cell type?
 SNPs associated with that cell type
 All SNPs
 
-FDR adjust
 
 ```{r}
 # mpranalyze quantitative results
